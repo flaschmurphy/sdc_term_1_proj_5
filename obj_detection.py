@@ -14,6 +14,9 @@ import numpy as np
 
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
 
 from skimage.feature import hog
 
@@ -25,6 +28,24 @@ from mpl_toolkits.mplot3d import Axes3D
 
 CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
 NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
+
+
+def imread(fname):
+    """Helper function to always load images in a consistent way"""
+    img = mpimg.imread(fname).astype(np.float32)
+    if '.png' in fname:
+        return img * (255.0/img.max())
+    return img
+
+
+def imshow(*args, **kwargs):
+    """Helper function to always show images in a consistent way"""
+    args_ = [i for i in args]
+    imgc = args_[0].copy()
+    if imgc.max() > 10:
+        imgc = (imgc - imgc.min()) / (imgc.max() - imgc.min())
+    args_[0] = imgc
+    plt.imshow(*args_, **kwargs)
 
 
 def svm(X=None, y=None, kernel='linear', C=1.0, gamma='auto'):
@@ -88,7 +109,7 @@ def find_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
 
     Args: 
         img: the image to search through
-        template_list: list of image templates file names (they are read 
+        template_fnames: list of image templates file names (they are read 
             from disk in this method)
         method: cv2.mathTemplate matching method. Other options include: 
             cv2.TM_CCORR_NORMED, cv2.TM_CCOEFF, cv2.TM_CCORR, cv2.TM_SQDIFF,
@@ -99,8 +120,8 @@ def find_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
 
     """
     bbox_list = []
-    for template in template_list:
-        tmp = mpimg.imread(template)
+    for template in template_fnames:
+        tmp = imread(template)
         result = cv2.matchTemplate(img, tmp, method)
 
         # Extract the location of the best match. `min_val` and `max_val` are not 
@@ -219,13 +240,13 @@ def bin_spatial(img, color_space='RGB', size=(32, 32)):
     else: 
         feature_image = np.copy(img)
 
-    features = cv2.resize(img, size).ravel()
+    features = cv2.resize(feature_image, size).ravel()
 
     return features
 
 
 def load_data(car_or_not='car', random=False, sanity=False, vis=False):
-    """Load all images from disk.
+    """Load all images from disk. Loads using matplotlib --> range will be 0 to 1.
 
     Args:
         car_or_not: if 'car', return a generator of car images, if 'not', return a generator 
@@ -248,14 +269,14 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
     if sanity:
         print('Checking that all images have the same size and dtype...')
 
-        image_shape = mpimg.imread(car_fnames[0]).shape
-        data_type = mpimg.imread(car_fnames[0]).dtype
+        image_shape = imread(car_fnames[0]).shape
+        data_type = imread(car_fnames[0]).dtype
 
         for fname in car_fnames + notcar_fnames:
-             shape = mpimg.imread(fname).shape
+             shape = imread(fname).shape
              if shape != image_shape:
                 raise Exception('Not all images have the same shape. {} was of size {}.'.format(fname, shape))
-             dtype = mpimg.imread(fname).dtype
+             dtype = imread(fname).dtype
              if dtype != data_type:
                 raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, dtype))
         print('  All images are consistent!')
@@ -276,33 +297,39 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
         notcar_ind = np.random.randint(0, len(notcar_fnames))
             
         # Read in car / not-car images
-        car_image = mpimg.imread(car_fnames[car_ind])
-        notcar_image = mpimg.imread(notcar_fnames[notcar_ind])
+        car_image = imread(car_fnames[car_ind])
+        car_image *= (255.0/car_image.max())    # normalize to (0, 255)
+
+        notcar_image = imread(notcar_fnames[notcar_ind])
 
         # Plot the examples
         fig = plt.figure()
         plt.subplot(121)
-        plt.imshow(car_image)
+        imshow(car_image)()
         plt.title('Example Car Image')
         plt.subplot(122)
-        plt.imshow(notcar_image)
+        imshow(notcar_image)()
         plt.title('Example Not-car Image')
         plt.show()
 
     if car_or_not == 'car':
         if random is True:
             idx = np.random.randint(0, len(car_fnames))
-            return car_fnames[idx], mpimg.imread(car_fnames[idx]), idx
+            img = imread(car_fnames[idx])
+            yield (car_fnames[idx], img, idx)
         else:
-            # The line below returns a generator of tuples
-            return ((f, mpimg.imread(f)) for f in car_fnames)
+            # returns a generator of tuples
+            for f in car_fnames:
+                yield f, imread(f)
     else:
         if random is True:
             idx = np.random.randint(0, len(notcar_fnames))
-            return notcar_fnames[idx], mpimg.imload(notcar_fnames[idx]), idx
+            img = imread(notcar_fnames[idx])
+            yield notcar_fnames[idx], img, idx
         else:
-            # The line below returns a generator of tuples
-            return ((f, mpimg.imread(f)) for f in notcar_fnames)
+            # returns a generator of tuples
+            for f in notcar_fnames:
+                yield f, imread(f)
 
 
 def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False, feature_vec=True):
@@ -347,7 +374,8 @@ def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False,
         return features
 
 
-def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256), vis=False):
+def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
+        hist_range=(0, 256), vis=False, length=-1):
     """Extract features using bin_spatial() and color_hist() to generate a feature vector.
 
     Args:
@@ -357,6 +385,7 @@ def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=3
         hist_bins: number of bins for the `color_hist()` function
         hist_range: hist range to pass to the `color_hist()` function
         vis: if True, plot the results in a window
+        length: if >-1, return a subset of the data that long, otherwise return all
 
     Returns:
         single list of normalized features
@@ -364,16 +393,24 @@ def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=3
     """
     features = []
 
+    if length == -1:
+        length = float('inf')
+
+    ctr = 0
     for fname, img in img_gnrtr:
         spatial_features = bin_spatial(img, color_space=cspace, size=spatial_size)
-        color_features = color_hist(img, nbins=hist_bins, bins_range=hist_range)
-        features.append(np.concatenate((spatial_features, color_features)))
+        assert len(spatial_features) > 0, 'Got no data back from bin_spatial,'
+
+        hist_features = color_hist(img, nbins=hist_bins, bins_range=hist_range)
+        assert len(hist_features) > 0, 'Got no data back from color_hist,'
+
+        features.append(np.concatenate((spatial_features, hist_features)).astype(np.float32))
 
         if vis is True:
             fig = plt.figure(figsize=(12,4))
 
             plt.subplot(131)
-            plt.imshow(img)
+            imshow(img)()
             plt.title('Original Image')
 
             plt.subplot(132)
@@ -387,6 +424,11 @@ def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=3
             fig.tight_layout()
             plt.show()
 
+        ctr += 1
+        if ctr == length:
+            break
+
+    assert len(features) > 0, 'Got no features.'
     return features
 
 
@@ -410,17 +452,100 @@ def main():
        - Gradients of pixel intensity:     shape only
 
     """
-    
-    # Helper lambda to easily convert to grayscale and other conversions
-    rgb2gray = lambda image: cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    bgr2rgb = lambda image: cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    ###############################################################
+    #
+    # Extract features and labels
+    #
+    ###############################################################
+    car_gnrtr = load_data(car_or_not='car')
+    notcar_gnrtr = load_data(car_or_not='notcar')
+
+    print('Loading all features and labels...')
+    car_features = extract_features(car_gnrtr, cspace='RGB', spatial_size=(32, 32),
+                                    hist_bins=32, hist_range=(0, 256), length=-1)
+    notcar_features = extract_features(notcar_gnrtr, cspace='RGB', spatial_size=(32, 32),
+                                    hist_bins=32, hist_range=(0, 256), length=-1)
+
+    # Create an array stack of feature vectors
+    X_not_scaled = np.vstack((car_features, notcar_features)).astype(np.float32)
+
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X_not_scaled)
+
+    # Generate the labels
+    car_labels = np.ones(len(car_features))
+    notcar_labels = np.zeros(len(notcar_features))
+    y = np.append(car_labels, notcar_labels)
+
+    print('Loaded, extracted features, scaled and labeled {:,} images, {:,} cars and {:,} not cars'.format(
+        len(y), len(car_features), len(notcar_features)))
+
 
     ###############################################################
     #
-    # Create a Support Vector Machine
+    # Plot an example of raw and scaled features
     #
     ###############################################################
-    #clf = svm()
+    num_plots = 5
+    enable=False
+    if enable:
+        for i in range(num_plots):
+            for t in load_data(car_or_not='car', random=True):
+                fname, image, idx = t
+            fig = plt.figure(figsize=(12,4))
+
+            plt.subplot(131)
+            imshow(image)
+            plt.title('Original Image')
+
+            plt.subplot(132)
+            plt.plot(X[idx])
+            plt.title('Raw Features')
+
+            plt.subplot(133)
+            plt.plot(X_scaled[idx])
+            plt.title('Scaled features')
+
+            fig.tight_layout()
+            plt.show()
+
+    ###############################################################
+    #
+    # Create a Support Vector Machine and GridSearchCV 
+    # for optimal params.
+    #
+    ###############################################################
+
+    # Set the amount of data to use for training the classifier.
+    subset_size = 100
+
+    print('Starting GridSearchCV on subset of length {}...'.format(subset_size))
+
+    #parameters = {'kernel': ('linear', 'rbf'), 'C': range(1, 10)}
+    parameters = [
+            {'kernel': ['linear'], 'C': [1, 10, 100, 1000]},
+            {'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
+        ]
+
+    #scores = ['precision', 'recall', 'accuracy']
+    scores = ['accuracy']
+
+    idx = np.random.permutation(X.shape[0])[:subset_size]
+    X_subset = X[idx]
+    y_subset = y[idx]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+            X_subset, y_subset, test_size=0.2, random_state=42, shuffle=True)
+
+    for score in scores:
+        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=1)
+        clf.fit(X_train, y_train)
+        print(clf.best_params_)
+        print(clf.best_score_)
+
+
+if __name__ == '__main__':
+    main()
 
 
     ###############################################################
@@ -428,10 +553,10 @@ def main():
     # Test adding boundary boxes
     #
     ###############################################################
-    #image = mpimg.imread('./test_images/bbox-example-image.jpg')
+    #image = imread('./test_images/bbox-example-image.jpg')
     #bboxes = [((837, 507), (1120, 669))]
     #result = draw_boxes(image, bboxes)
-    #plt.imshow(result)
+    #imshow(result)()
     #plt.show()
 
 
@@ -447,9 +572,9 @@ def main():
     #
     ###############################################################
     #bboxs = template_matching()
-    #image = cv2.imread('./test_images/bbox-example-image.jpg')
+    #image = imread('./test_images/bbox-example-image.jpg')
     #image = draw_boxes(image, bboxs)
-    #plt.imshow(image)
+    #imshow(image)()
     #plt.show()
 
 
@@ -458,8 +583,8 @@ def main():
     # Show color histogram for RGB space
     #
     ###############################################################
-    #img = mpimg.imread('test_images/cutout1.jpg')
-    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img)
+    #img = imread('test_images/cutout1.jpg')
+    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img, vis=True)
     #fig = plt.figure(figsize=(12,3))
     #plt.subplot(131)
     #plt.bar(bin_centers, rhist[0])
@@ -485,7 +610,7 @@ def main():
     #files = glob.glob('./test_images/*.png')
     #for f in files:
     #    print(f)
-    #    img = cv2.imread(f)
+    #    img = imread(f)
     #    
     #    # Select a small fraction of pixels to plot by subsampling it
     #    scale = max(img.shape[0], img.shape[1], 64) / 64  # at most 64 rows and columns
@@ -493,23 +618,23 @@ def main():
     #        np.int(img.shape[0] / scale)), interpolation=cv2.INTER_NEAREST)
     #    
     #    # Convert subsampled image to desired color space(s)
-    #    img_small_RGB = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
-    #    img_small_HSV = cv2.cvtColor(img_small, cv2.COLOR_BGR2HSV)
-    #    img_small_HLS = cv2.cvtColor(img_small, cv2.COLOR_BGR2HLS)
-    #    img_small_YCR = cv2.cvtColor(img_small, cv2.COLOR_BGR2YCrCb)
+    #    img_small_RGB = img_small
+    #    img_small_HSV = cv2.cvtColor(img_small, cv2.COLOR_RGB2HSV)
+    #    img_small_HLS = cv2.cvtColor(img_small, cv2.COLOR_RGB2HLS)
+    #    img_small_YCR = cv2.cvtColor(img_small, cv2.COLOR_RGB2YCrCb)
     #    img_small_rgb = img_small_RGB / 255.  # scaled to [0, 1], only for plotting
     #    
     #    # Plot and show
-    #    #plot3d(img_small_RGB, img_small_rgb)
-    #    #plt.show()
-    #    #
-    #    #plot3d(img_small_HSV, img_small_rgb, axis_labels=list("HSV"))
-    #    #plt.show()
+    #    plot3d(img_small_RGB, img_small_rgb, axis_labels=list("RGB"))
+    #    plt.show()
+    #    
+    #    plot3d(img_small_HSV, img_small_rgb, axis_labels=list("HSV"))
+    #    plt.show()
 
-    #    #plot3d(img_small_HLS, img_small_rgb, axis_labels=list("HLS"))
-    #    #plt.show()
+    #    plot3d(img_small_HLS, img_small_rgb, axis_labels=list("HLS"))
+    #    plt.show()
 
-    #    plot3d(img_small_YCR, img_small_rgb, axis_labels=list("HLS"))
+    #    plot3d(img_small_YCR, img_small_rgb, axis_labels=list("YCrCb"))
     #    plt.show()
 
 
@@ -519,7 +644,7 @@ def main():
     #
     ###############################################################
 
-    #image = mpimg.imread('test_images/cutout1.jpg')
+    #image = imread('test_images/cutout1.jpg')
     #feature_vec = bin_spatial(image, color_space='LUV', size=(32, 32))
     ## Plot features
     #plt.plot(feature_vec)
@@ -543,7 +668,8 @@ def main():
     ###############################################################
 
     # Generate a random index to look at a car image
-    #fname, image, idx = load_data(car_or_not='car', random=True)
+    #for t in load_data(car_or_not='car', random=True):
+    #    fname, image, idx = t
 
     ## Convert to gray before sending to HOG
     #gray = rgb2gray(image)
@@ -560,7 +686,7 @@ def main():
     ## Plot the examples
     #fig = plt.figure()
     #plt.subplot(121)
-    #plt.imshow(image, cmap='gray')
+    #imshow(image, cmap='gray')()
     #plt.title('Example Car Image')
     #plt.subplot(122)
     #plt.imshow(hog_image, cmap='gray')
@@ -574,56 +700,4 @@ def main():
     #
     ###############################################################
     #_ = load_data(sanity=True)
-
-
-    ###############################################################
-    #
-    # Create the image loading generators (fname, rgb_img) tuples
-    #
-    ###############################################################
-
-    car_gnrtr = load_data(car_or_not='car')
-    notcar_gnrtr = load_data(car_or_not='notcar')
-
-
-    ###############################################################
-    #
-    # Extract features
-    #
-    ###############################################################
-
-    car_features = extract_features(car_gnrtr, cspace='RGB', spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256))
-    notcar_features = extract_features(notcar_gnrtr, cspace='RGB', spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256))
-
-    if len(car_features) > 0:
-        # Create an array stack of feature vectors
-        X = np.vstack((car_features, notcar_features)).astype(np.float64)
-        # Fit a per-column scaler
-        X_scaler = StandardScaler().fit(X)
-        # Apply the scaler to X
-        scaled_X = X_scaler.transform(X)
-        
-        # Plot an example of raw and scaled features
-        fname, random_car, idx = load_data(car_or_not='car', random=True)
-        fig = plt.figure(figsize=(12,4))
-        plt.subplot(131)
-        plt.imshow(random_car)
-        plt.title('Original Image')
-        plt.subplot(132)
-        plt.plot(X[idx])
-        plt.title('Raw Features')
-        plt.subplot(133)
-        plt.plot(scaled_X[idx])
-        plt.title('Normalized Features')
-        fig.tight_layout()
-        plt.show()
-    else: 
-        print('Your function only returns empty feature vectors...')
-
-
-if __name__ == '__main__':
-    main()
-
 
