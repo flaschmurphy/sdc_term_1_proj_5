@@ -517,7 +517,7 @@ def main():
     ###############################################################
 
     # Set the amount of data to use for training the classifier.
-    subset_size = 100
+    subset_size = 5000
 
     print('Starting GridSearchCV on subset of length {}...'.format(subset_size))
 
@@ -538,14 +538,16 @@ def main():
             X_subset, y_subset, test_size=0.2, random_state=42, shuffle=True)
 
     for score in scores:
-        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=1)
+        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=9)
         clf.fit(X_train, y_train)
         print(clf.best_params_)
         print(clf.best_score_)
 
+    return clf
+
 
 if __name__ == '__main__':
-    main()
+    clf = main()
 
 
     ###############################################################
