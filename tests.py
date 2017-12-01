@@ -1,8 +1,11 @@
 import pickle
 import glob
-from obj_detection import *
+import cv2
 import matplotlib.pyplot as plt
 
+from obj_detection import *
+
+MODEL_FILE = './model_full.pkl'
 
 def predict(fname, clf, car=True, vis=True):
     """Run the classifier on an image and get a prediction"""
@@ -34,7 +37,7 @@ def test_predictions():
     car_fnames = glob.glob('./test_images/car_*')
     notcar_fnames = glob.glob('./test_images/notcar_*')
 
-    with open('model1.pkl', 'rb') as f:
+    with open(MODEL_FILE, 'rb') as f:
         clf = pickle.load(f)
 
     for fname in car_fnames:
@@ -43,8 +46,19 @@ def test_predictions():
     for fname in notcar_fnames:
         predict(fname, clf, car=False)
 
+
+def test_windowing():
+    img_size = (960, 1280, 3)
+    window_size = (64, 64)
+    overlap = 0.5
+    start_pos = (0, 0)
+
+    get_window_points(img_size, window_size, overlap, start_pos, vis=True)
+
+
 def main():
-    test_predictions()
+    #test_predictions()
+    test_windowing()
 
 
 if __name__ == '__main__':

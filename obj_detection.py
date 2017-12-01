@@ -542,6 +542,51 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     return clf
 
 
+def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start_pos=(0, 0), vis=False):
+    """Generate top left and bottom right rectangle corners for boundary boxes.
+
+    Args:
+        img_size: the `img.shape()` of the image/canvas to generate the boxes for, e.g. (960, 1280, 3)
+        window_size: the size of the sliding window in (x, y) order
+        overlap: by how much should the windows overlap, e.g. 50% would be 0.5
+        start_pos: the (x, y) coordinate to start from
+
+    Returns:
+        a list of (top_left, bottom_right) tuples that can be passed to `cv2.rectangle()`
+
+    """
+
+    size_x, size_y = window_size
+    x_positions = []
+    y_positions = []
+
+    start_x = start_pos[0]
+    while start_x <= img_size[1]-size_x:
+        x_positions.append((start_x, start_x+size_x))
+        start_x += int(size_x*overlap)
+
+    start_y = start_pos[1]
+    while start_y <= img_size[0]-size_y:
+        y_positions.append((start_y, start_y+size_y))
+        start_y += int(size_y*overlap)
+
+    bboxes = []
+    for x in range(len(x_positions)):
+        for y in range(len(y_positions)):
+            bboxes.append([_ for _ in zip(x_positions[x], y_positions[y])])
+
+    if vis:
+        get_clr = lambda: np.random.randint(255, size=(3))/255.0
+        canvas = np.ones(img_size)
+        for box in bboxes:
+            cv2.rectangle(canvas, box[0], box[1], get_clr())
+
+        plt.imshow(canvas)
+        plt.show()
+
+    return bboxes
+
+
 def main(train=False, save_file=None, subset_size=-1, model_file=None):
     """The main entry point
 
