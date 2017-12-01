@@ -69,7 +69,11 @@ def imshow(*args, **kwargs):
     if imgc.max() > 1:
         imgc = (imgc - imgc.min()) / (imgc.max() - imgc.min())
     args_[0] = imgc
-    plt.imshow(*args_, **kwargs)
+    if 'axis' in kwargs:
+        axis = kwargs.pop('axis')
+        axis.imshow(*args, **kwargs)
+    else:
+        plt.imshow(*args_, **kwargs)
 
 
 def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
@@ -218,7 +222,8 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
         spacial_size: input to be used for the `bin_spacial()` function
         hist_bins: number of bins for the `color_hist()` function
         hist_range: hist range to pass to the `color_hist()` function
-        vis: if True, plot the results in a window
+        vis: if True, plot the results in a window and also store these visualizations
+            to a local folder called './resources' for offline viewing
         length: if >-1, return a subset of the data that long, otherwise return all
 
     Returns:
@@ -503,7 +508,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
         assert model_file is not None, 'Must specify a model file if not training'
         assert os.path.exists(model_file), 'Model file does not exist'
 
-        with open(pickle_file, 'rb') as f:
+        with open(model_file, 'rb') as f:
             clf = pickle.load(f)
 
         print('Model was loaded from disk at location: {}.'.format(model_file))
@@ -542,12 +547,48 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     return clf
 
 
-def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start_pos=(0, 0), vis=False):
+def predict(img, clf, fname='unknown', car=None, vis=False):
+    """Extract features and run the classifier on an image.
+    
+    Args:
+        img: the image to predict against
+        clf: the classifier
+        fname: the filename of the original file containing the image
+        car: if known (while testing), whether or not this is a car image
+        vis: if True, display a visualization of the pipeline
+        
+    Returns:
+        Prediction and confidence value. The prediction is 1 if the prediction
+            is 'car' or 0 if the prediction is 'not car'
+        
+    """
+    features = extract_features([[fname, img, 0]], cspace='YCrCb', vis=vis)
+    prediction = int(clf.predict(features)[0])
+    confidence = clf.decision_function(features)[0]
+
+    if car is not None:
+        prediction_txt = 'car'
+        if prediction == 0:
+            prediction_txt = 'notcar'
+
+        result = 'CORRECT'
+        if prediction == 0 and car:
+            result = 'INCORRECT'
+        if prediction == 1 and not car:
+            result = 'INCORRECT'
+        print('{:35}, model predicts {} ({:6}) --> {:9} ({})'.format(
+            fname, prediction, prediction_txt, result, confidence))
+
+    return prediction, confidence
+
+
+def get_window_points(img_size, window_size=(64, 64), clip=0.4, overlap=0.5, start_pos=(0, 0), vis=False):
     """Generate top left and bottom right rectangle corners for boundary boxes.
 
     Args:
         img_size: the `img.shape()` of the image/canvas to generate the boxes for, e.g. (960, 1280, 3)
         window_size: the size of the sliding window in (x, y) order
+        clip: proportion of the bottom of the image to retain (e.g. 0.5 means only box the bottom half)
         overlap: by how much should the windows overlap, e.g. 50% would be 0.5
         start_pos: the (x, y) coordinate to start from
 
@@ -571,8 +612,8 @@ def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start_pos=(0,
         start_y += int(size_y*overlap)
 
     bboxes = []
-    for x in range(len(x_positions)):
-        for y in range(len(y_positions)):
+    for y in range(len(y_positions))[int(len(y_positions)*(1-clip)):]:
+        for x in range(len(x_positions)):
             bboxes.append([_ for _ in zip(x_positions[x], y_positions[y])])
 
     if vis:
@@ -588,7 +629,7 @@ def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start_pos=(0,
 
 
 def main(train=False, save_file=None, subset_size=-1, model_file=None):
-    """The main entry point
+    """Main entry point.
 
     Reminders from lessons and notes:
 
