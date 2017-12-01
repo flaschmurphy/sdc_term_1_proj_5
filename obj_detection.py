@@ -7,10 +7,13 @@
  Date: 27th Nov 2017
 
 """
-
+import os
 import glob
 import cv2
+import sys
+import pickle
 import numpy as np
+from argparse import ArgumentParser
 
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -30,11 +33,32 @@ CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
 NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
 
 
+def parse_args():
+    parser = ArgumentParser()
+    model_group = parser.add_mutually_exclusive_group(required=True)
+    model_group.add_argument('-t', '--train', dest='train_size',
+            help="""Include the training step and use TRAIN value as the number of samples to 
+            use for training on. Specify '-1' to train on all available data. If not including 
+            training, must specify a model to load from disk (a previously pickled one) 
+            using the `-m` switch.""")
+    model_group.add_argument('-m', '--model', dest='model_file', 
+            help="""Where to find a previously pickled model file to use instead of training""")
+    parser.add_argument('-s', '--save', dest='save_file', 
+            help="""Where to save the SVM model back to disk (if training)""")
+
+    args = parser.parse_args()
+
+    if args.train_size is not None and args.save_file is None:
+        print('WARNING!!! Trained model will not be stored to disk!')
+
+    return args
+
+
 def imread(fname):
     """Helper function to always load images in a consistent way"""
     img = mpimg.imread(fname).astype(np.float32)
-    if '.png' in fname:
-        return img * (255.0/img.max())
+    if img.max() < 1.1:
+        img *= 255
     return img
 
 
@@ -42,7 +66,7 @@ def imshow(*args, **kwargs):
     """Helper function to always show images in a consistent way"""
     args_ = [i for i in args]
     imgc = args_[0].copy()
-    if imgc.max() > 10:
+    if imgc.max() > 1:
         imgc = (imgc - imgc.min()) / (imgc.max() - imgc.min())
     args_[0] = imgc
     plt.imshow(*args_, **kwargs)
@@ -158,6 +182,9 @@ def color_hist(img, nbins=32, bins_range=(0, 256), vis=False):
         bin_centers
 
     """
+    assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+
+    img = img.copy()
     ch1_hist = np.histogram(img[:,:,0], bins=nbins, range=bins_range)
     ch2_hist = np.histogram(img[:,:,1], bins=nbins, range=bins_range)
     ch3_hist = np.histogram(img[:,:,2], bins=nbins, range=bins_range)
@@ -170,6 +197,115 @@ def color_hist(img, nbins=32, bins_range=(0, 256), vis=False):
     bin_centers = (bin_edges[1:] + bin_edges[0:len(bin_edges)-1])/2
 
     return ch1_hist, ch2_hist, ch3_hist, hist_features, bin_centers
+
+
+def bin_spatial(img, color_space='RGB', size=(32, 32)):
+    """Convert an image to the provided color space, rescale it and unroll it.
+
+    Args:
+        img: the input image (assumed to be in RGB color space)
+        color_space: target color space to convert to
+        size: target size to scale to
+
+    Returns:
+        one dimensional feature vector of the converted image
+
+    """
+
+    assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+    assert color_space in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
+
+    if color_space == 'BGR':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2RGB)
+    elif color_space == 'HSV':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    elif color_space == 'LUV':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
+    elif color_space == 'HLS':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
+    elif color_space == 'YUV':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+    elif color_space == 'YCrCb':
+        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
+    else: 
+        feature_image = np.copy(img)
+
+    assert feature_image.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+
+    features = cv2.resize(feature_image, size).ravel()
+
+    return features
+
+
+def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
+        hist_range=(0, 256), vis=True, length=-1):
+    """Extract features using bin_spatial() and color_hist() to generate a feature vector.
+
+    Args:
+        img_data: a list of 3-tuples containing (filename, RGB image, idx) where idx is the index of 
+            where that image was found in the original training data
+        cspace: color space to pass to `bin_spatial()`
+        spacial_size: input to be used for the `bin_spacial()` function
+        hist_bins: number of bins for the `color_hist()` function
+        hist_range: hist range to pass to the `color_hist()` function
+        vis: if True, plot the results in a window
+        length: if >-1, return a subset of the data that long, otherwise return all
+
+    Returns:
+        single list of normalized features
+
+    """
+    features = []
+    if length == -1:
+        length = float('inf')
+
+    ctr = 0
+    for fname, img, idx in img_data:
+        assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+
+        spatial_features = bin_spatial(img, color_space=cspace, size=spatial_size)
+        assert len(spatial_features) > 0, 'Got no data back from bin_spatial for image {} at position {},'.format(
+                fname, idx)
+
+        hist_features = color_hist(img, nbins=hist_bins, bins_range=hist_range)
+        assert len(hist_features) > 0, 'Got no data back from color_hist for image {}  at position {},'.format(
+                fname, idx)
+
+        features.append(np.concatenate((spatial_features, hist_features)).astype(np.float32))
+
+        plt.ion()
+        if vis is True and ctr % 100 == 0:
+            plt.clf()
+            fig = plt.gcf()
+            fig.set_size_inches(18.5, 10.5, forward=True)
+
+            plt.subplot(141)
+            imshow(img)
+            plt.title('Original Image')
+
+            plt.subplot(142)
+            plt.plot(spatial_features)
+            plt.title('Spatial')
+
+            plt.subplot(143)
+            plt.plot(hist_features)
+            plt.title('Color')
+
+            plt.subplot(144)
+            plt.plot(features[-1])
+            plt.title('Feature Extraction ({})'.format(cspace))
+
+            fig.tight_layout()
+            plt.show()
+            plt.pause(0.05)
+
+        ctr += 1
+        if ctr == length:
+            break
+
+    assert len(features) > 0, 'Got no features.'
+
+    return features
 
 
 def plot3d(pixels, colors_rgb, axis_labels=list("RGB"), axis_limits=((0, 255), (0, 255), (0, 255))):
@@ -211,40 +347,6 @@ def plot3d(pixels, colors_rgb, axis_labels=list("RGB"), axis_limits=((0, 255), (
     return ax
 
 
-def bin_spatial(img, color_space='RGB', size=(32, 32)):
-    """Convert an image to the provided color space, rescale it and unroll it.
-
-    Args:
-        img: the input image (assumed to be in RGB color space)
-        color_space: target color space to convert to
-        size: target size to scale to
-
-    Returns:
-        one dimensional feature vector of the converted image
-
-    """
-    assert color_space in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
-
-    if color_space == 'BGR':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2RGB)
-    elif color_space == 'HSV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-    elif color_space == 'LUV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
-    elif color_space == 'HLS':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    elif color_space == 'YUV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
-    elif color_space == 'YCrCb':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
-    else: 
-        feature_image = np.copy(img)
-
-    features = cv2.resize(feature_image, size).ravel()
-
-    return features
-
-
 def load_data(car_or_not='car', random=False, sanity=False, vis=False):
     """Load all images from disk. Loads using matplotlib --> range will be 0 to 1.
 
@@ -257,7 +359,7 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
         vis: if True, display a random sample image
 
     Returns:
-       a generator of 2-tuples containing (filename, image). Note: the color space is RGB.
+       a list of 2-tuples containing (filename, image). Note: the color space is RGB.
 
     """
     assert car_or_not in ['car', 'notcar'], "Invalid option for 'car_or_not'. Chose from ['car', 'notcar']"
@@ -313,23 +415,22 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
         plt.show()
 
     if car_or_not == 'car':
-        if random is True:
-            idx = np.random.randint(0, len(car_fnames))
-            img = imread(car_fnames[idx])
-            yield (car_fnames[idx], img, idx)
-        else:
-            # returns a generator of tuples
-            for f in car_fnames:
-                yield f, imread(f)
+        fnames = car_fnames
     else:
-        if random is True:
-            idx = np.random.randint(0, len(notcar_fnames))
-            img = imread(notcar_fnames[idx])
-            yield notcar_fnames[idx], img, idx
-        else:
-            # returns a generator of tuples
-            for f in notcar_fnames:
-                yield f, imread(f)
+        fnames = notcar_fnames
+
+    ret = []
+    if random is True:
+        idx = np.random.randint(0, len(fnames))
+        img = imread(fnames[idx])
+        ret.append([fnames[idx], img, idx])
+    else:
+        i = 0
+        for f in fnames:
+            ret.append([f, imread(f), i])
+            i += 1
+
+    return ret
 
 
 def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False, feature_vec=True):
@@ -374,97 +475,20 @@ def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False,
         return features
 
 
-def extract_features(img_gnrtr, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
-        hist_range=(0, 256), vis=False, length=-1):
-    """Extract features using bin_spatial() and color_hist() to generate a feature vector.
-
-    Args:
-        img_gnrtr: a generator of RGB images
-        cspace: color space to pass to `bin_spatial()`
-        spacial_size: input to be used for the `bin_spacial()` function
-        hist_bins: number of bins for the `color_hist()` function
-        hist_range: hist range to pass to the `color_hist()` function
-        vis: if True, plot the results in a window
-        length: if >-1, return a subset of the data that long, otherwise return all
-
-    Returns:
-        single list of normalized features
-
+def get_xy(length=-1):
+    """Load image data and extract features and labels for training
     """
-    features = []
 
-    if length == -1:
-        length = float('inf')
+    print('Loading features and labels...')
 
-    ctr = 0
-    for fname, img in img_gnrtr:
-        spatial_features = bin_spatial(img, color_space=cspace, size=spatial_size)
-        assert len(spatial_features) > 0, 'Got no data back from bin_spatial,'
+    cspace = 'YCrCb'
 
-        hist_features = color_hist(img, nbins=hist_bins, bins_range=hist_range)
-        assert len(hist_features) > 0, 'Got no data back from color_hist,'
-
-        features.append(np.concatenate((spatial_features, hist_features)).astype(np.float32))
-
-        if vis is True:
-            fig = plt.figure(figsize=(12,4))
-
-            plt.subplot(131)
-            imshow(img)()
-            plt.title('Original Image')
-
-            plt.subplot(132)
-            plt.plot(spatial_features)
-            plt.title('Spatial')
-
-            plt.subplot(133)
-            plt.plot(color_features)
-            plt.title('Color')
-
-            fig.tight_layout()
-            plt.show()
-
-        ctr += 1
-        if ctr == length:
-            break
-
-    assert len(features) > 0, 'Got no features.'
-    return features
-
-
-def main():
-    """The main entry point
-
-    Reminders: 
-
-    * In the HOG function, you could also include a keyword to set the tranform_sqrt flag but
-      for this exercise you can just leave this at the default value of
-      transform_sqrt=False
-
-    * Don't forget to normalize any concatenated features in the pipeline (they should 
-      all be in the same range, e.g. between 0 and 1). Use sklearn.StandardScalar()
-
-    * Either use cv2.imread (meaning BGR) or mpimg.imread (meaning RGB) but don't mix them
-
-    * Feature extraction: 
-       - Raw pixel intensity:              color and shape
-       - Histogram of pixel intensity:     color only
-       - Gradients of pixel intensity:     shape only
-
-    """
-    ###############################################################
-    #
-    # Extract features and labels
-    #
-    ###############################################################
-    car_gnrtr = load_data(car_or_not='car')
-    notcar_gnrtr = load_data(car_or_not='notcar')
-
-    print('Loading all features and labels...')
-    car_features = extract_features(car_gnrtr, cspace='RGB', spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256), length=-1)
-    notcar_features = extract_features(notcar_gnrtr, cspace='RGB', spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256), length=-1)
+    car_data = load_data(car_or_not='car')
+    notcar_data = load_data(car_or_not='notcar')
+    car_features = extract_features(car_data, cspace=cspace, spatial_size=(32, 32),
+                                    hist_bins=32, hist_range=(0, 256), length=length)
+    notcar_features = extract_features(notcar_data, cspace=cspace, spatial_size=(32, 32),
+                                    hist_bins=32, hist_range=(0, 256), length=length)
 
     # Create an array stack of feature vectors
     X_not_scaled = np.vstack((car_features, notcar_features)).astype(np.float32)
@@ -480,46 +504,45 @@ def main():
     print('Loaded, extracted features, scaled and labeled {:,} images, {:,} cars and {:,} not cars'.format(
         len(y), len(car_features), len(notcar_features)))
 
+    return X, y
 
-    ###############################################################
-    #
-    # Plot an example of raw and scaled features
-    #
-    ###############################################################
-    num_plots = 5
-    enable=False
-    if enable:
-        for i in range(num_plots):
-            for t in load_data(car_or_not='car', random=True):
-                fname, image, idx = t
-            fig = plt.figure(figsize=(12,4))
 
-            plt.subplot(131)
-            imshow(image)
-            plt.title('Original Image')
+def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None):
+    """Create a Support Vector Machine and GridSearchCV for optimal params.
 
-            plt.subplot(132)
-            plt.plot(X[idx])
-            plt.title('Raw Features')
+    Args:
+        train: if True, training will be performed, otherwise a model is loaded 
+            from disk
+        X: the feature data
+        y: the label data
+        subset_size: if not none, train on a subset of data this size, otherwise
+            train on all data
+        model_file: if not training, load a pickled model from disk at this location
+            and return that instead
 
-            plt.subplot(133)
-            plt.plot(X_scaled[idx])
-            plt.title('Scaled features')
+    Returns:
+        a trained SVM model
 
-            fig.tight_layout()
-            plt.show()
+    """
+    if train is False:
+        assert model_file is not None, 'Must specify a model file if not training'
+        assert os.path.exists(model_file), 'Model file does not exist'
 
-    ###############################################################
-    #
-    # Create a Support Vector Machine and GridSearchCV 
-    # for optimal params.
-    #
-    ###############################################################
+        with open(pickle_file, 'rb') as f:
+            clf = pickle.load(f)
+
+        print('Model was loaded from disk at location: {}.'.format(model_file))
+        return clf
+
+    assert X is not None, 'Must supply features for training'
+    assert y is not None, 'Must supply labels for training'
+    assert X.shape[0] == y.shape[0], 'Features and labels must be the same length'
 
     # Set the amount of data to use for training the classifier.
-    subset_size = 5000
+    if subset_size is None:
+        subset_size = len(y)
 
-    print('Starting GridSearchCV on subset of length {}...'.format(subset_size))
+    print('Subset of length {} will be used for training...'.format(subset_size))
 
     #parameters = {'kernel': ('linear', 'rbf'), 'C': range(1, 10)}
     parameters = [
@@ -537,17 +560,104 @@ def main():
     X_train, X_test, y_train, y_test = train_test_split(
             X_subset, y_subset, test_size=0.2, random_state=42, shuffle=True)
 
+    print()
+    print('Starting GridSearch...')
     for score in scores:
-        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=9)
+        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=0)
         clf.fit(X_train, y_train)
-        print(clf.best_params_)
-        print(clf.best_score_)
+        print('Best Params: {}'.format(clf.best_params_))
+        print('Best Score: {}'.format(clf.best_score_))
+
+    print('Final score on test set: {}'.format(clf.score(X_test, y_test)))
+    print()
 
     return clf
 
 
+def main(train=False, save_file=None, subset_size=-1, model_file=None):
+    """The main entry point
+
+    Reminders from lessons and notes:
+
+    * In the HOG function, you could also include a keyword to set the tranform_sqrt flag but
+      for this exercise you can just leave this at the default value of
+      transform_sqrt=False
+
+    * Don't forget to normalize any concatenated features in the pipeline (they should 
+      all be in the same range, e.g. between 0 and 1). Use sklearn.StandardScalar()
+
+    * Either use cv2.imread (meaning BGR) or mpimg.imread (meaning RGB) but don't mix them
+
+    * Feature extraction: 
+       - Raw pixel intensity:              color and shape
+       - Histogram of pixel intensity:     color only
+       - Gradients of pixel intensity:     shape only
+
+
+    Args:
+        train: if True, run training
+        save_file: if not None and training, save the model to this location after training
+        subset_size: limits the amount of data used for training, default is all data
+        model_file; where to save the trained model to
+
+
+    """
+
+    ###############################################################
+    #
+    # Plot an example of raw and scaled features
+    #
+    ###############################################################
+    enable=False
+
+    num_plots = 5
+    if enable:
+        for i in range(num_plots):
+            fname, image, idx = load_data(car_or_not='car', random=True)[0]
+
+            fig = plt.figure(figsize=(12,4))
+
+            plt.subplot(131)
+            imshow(image)
+            plt.title('Original Image')
+
+            plt.subplot(132)
+            plt.plot(X[idx])
+            plt.title('Raw Features')
+
+            plt.subplot(133)
+            plt.plot(X_scaled[idx])
+            plt.title('Scaled features')
+
+            fig.tight_layout()
+            plt.show()
+    #
+    #
+    ###############################################################
+
+    # Load a classifier
+    if train is False:
+        clf = get_svm_model(model_file=model_file)
+    else:
+        X, y =  get_xy(length=subset_size)
+        clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
+
+        if save_file is not None:
+            if os.path.exists(save_file): 
+                print('WARNING!! Overwriting previous model file [{}] now!'.format(save_file))
+            pickle.dump(clf, open(save_file, 'wb'))
+            print('Model was saved to {}'.format(save_file))
+
+
 if __name__ == '__main__':
-    clf = main()
+    args = parse_args()
+    if args.train_size is None:
+        train = False
+        trainsize = -1
+    else:
+        train = True
+        trainsize = int(args.train_size)
+    clf = main(train=train, subset_size=trainsize, save_file=args.save_file, model_file=args.model_file)
 
 
     ###############################################################
@@ -561,13 +671,6 @@ if __name__ == '__main__':
     #imshow(result)()
     #plt.show()
 
-
-    ###############################################################
-    #
-    #
-    ###############################################################
-
-
     ###############################################################
     #
     # Muck around with boxing using cv2 image templates
@@ -579,14 +682,13 @@ if __name__ == '__main__':
     #imshow(image)()
     #plt.show()
 
-
     ###############################################################
     #
-    # Show color histogram for RGB space
+    # Show color histogram for color space
     #
     ###############################################################
     #img = imread('test_images/cutout1.jpg')
-    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img, vis=True)
+    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img, cspace='YCrCb', vis=True)
     #fig = plt.figure(figsize=(12,3))
     #plt.subplot(131)
     #plt.bar(bin_centers, rhist[0])
@@ -654,15 +756,6 @@ if __name__ == '__main__':
     #plt.show()
     ## Question - can we scale down even further? Consider this when training classifier
 
-
-    ###############################################################
-    #
-    # Explore the images
-    #
-    ###############################################################
-    #load_data(sanity=True)
-
-
     ###############################################################
     #
     # Test the HOG function
@@ -670,8 +763,8 @@ if __name__ == '__main__':
     ###############################################################
 
     # Generate a random index to look at a car image
-    #for t in load_data(car_or_not='car', random=True):
-    #    fname, image, idx = t
+    #d = load_data(car_or_not='car', random=True)
+    #fname, image, idx = d[0]
 
     ## Convert to gray before sending to HOG
     #gray = rgb2gray(image)
