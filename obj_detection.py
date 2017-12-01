@@ -72,36 +72,6 @@ def imshow(*args, **kwargs):
     plt.imshow(*args_, **kwargs)
 
 
-def svm(X=None, y=None, kernel='linear', C=1.0, gamma='auto'):
-    """Create a Support Vector Machine. Advantages of SVMs - the work well in
-    complex domains where there is a clear margin of separation. Don't work
-    well where there is a lot of data because the training is cubic in the
-    size of the dataset. Also don't work in the presence of a lot of noise (try
-    Naive Bayes if there's lots of noise).
-
-    Args:
-        X: training features
-        y: training labels
-        kernel: the tupe of SVM kernel to use
-        C: controls the tradeoff between a smooth deision boundary and
-            classifying training points correctly. A large C means you'll get more
-            training points correct and a more complex decision boundary
-        gamma: defines how far the influence of a single training example
-            reaches. Low value will mean that every point has a far reach, high
-            values means points only have a close reach.
-
-    Returns:
-        if X and y are not None, a trained SVM, otherwise an untrained SVM
-
-    """
-    clf = SVC(C=C, kernel=kernel, gamma=gamma)
-
-    if X is not None and y is not None:
-        clf.fit(X, y)
-
-    return clf
-
-
 def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
     """Draw a rectangular box over an image
 
@@ -238,7 +208,7 @@ def bin_spatial(img, color_space='RGB', size=(32, 32)):
 
 
 def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
-        hist_range=(0, 256), vis=True, length=-1):
+        hist_range=(0, 256), vis=False, length=-1):
     """Extract features using bin_spatial() and color_hist() to generate a feature vector.
 
     Args:
@@ -275,9 +245,12 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
 
         plt.ion()
         if vis is True and ctr % 100 == 0:
+            if not os.path.exists('./resources'):
+                os.mkdir('./resources')
+
             plt.clf()
             fig = plt.gcf()
-            fig.set_size_inches(18.5, 10.5, forward=True)
+            fig.set_size_inches(18.5, 5, forward=True)
 
             plt.subplot(141)
             imshow(img)
@@ -298,6 +271,8 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
             fig.tight_layout()
             plt.show()
             plt.pause(0.05)
+
+            plt.savefig('./resources/features_{}_{}'.format(idx, os.path.basename(fname)))
 
         ctr += 1
         if ctr == length:
@@ -542,16 +517,10 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     if subset_size is None:
         subset_size = len(y)
 
-    print('Subset of length {} will be used for training...'.format(subset_size))
-
-    #parameters = {'kernel': ('linear', 'rbf'), 'C': range(1, 10)}
     parameters = [
             {'kernel': ['linear'], 'C': [1, 10, 100, 1000]},
-            {'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
+            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
         ]
-
-    #scores = ['precision', 'recall', 'accuracy']
-    scores = ['accuracy']
 
     idx = np.random.permutation(X.shape[0])[:subset_size]
     X_subset = X[idx]
@@ -562,11 +531,10 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
 
     print()
     print('Starting GridSearch...')
-    for score in scores:
-        clf = GridSearchCV(SVC(C=1), parameters, cv=5, scoring=score, verbose=0)
-        clf.fit(X_train, y_train)
-        print('Best Params: {}'.format(clf.best_params_))
-        print('Best Score: {}'.format(clf.best_score_))
+    clf = GridSearchCV(SVC(), parameters, cv=5, verbose=9)
+    clf.fit(X_train, y_train)
+    print('Best Params: {}'.format(clf.best_params_))
+    print('Best Score: {}'.format(clf.best_score_))
 
     print('Final score on test set: {}'.format(clf.score(X_test, y_test)))
     print()
