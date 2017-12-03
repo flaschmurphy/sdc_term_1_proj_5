@@ -29,8 +29,10 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
-NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
+#CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
+#NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
+CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
+NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
 
 
 def parse_args():
@@ -54,11 +56,14 @@ def parse_args():
     return args
 
 
-def imread(fname):
+def imread(fname, for_prediction=False):
     """Helper function to always load images in a consistent way"""
-    img = mpimg.imread(fname).astype(np.float32)
-    if img.max() < 1.1:
-        img *= 255
+    img = cv2.imread(fname).astype(np.float32)
+    if int(img.max()) <= 1:
+        print('!!! WARNING !!! Image does not apper to be the right scale, found ({}, {}) for {}.'.format(
+            img.min(), img.max(), fname))
+    if for_prediction is True:
+        img.resize((64, 64, 3))
     return img
 
 
@@ -66,12 +71,15 @@ def imshow(*args, **kwargs):
     """Helper function to always show images in a consistent way"""
     args_ = [i for i in args]
     imgc = args_[0].copy()
-    if imgc.max() > 1:
-        imgc = (imgc - imgc.min()) / (imgc.max() - imgc.min())
+
+    # Because I'm using cv2 to load the images, they are in BGR format
+    # and scalled to 0,255. Fix this before displaying in pyplot as follows
+    imgc = imgc[:,:,::-1]/255
     args_[0] = imgc
+
     if 'axis' in kwargs:
         axis = kwargs.pop('axis')
-        axis.imshow(*args, **kwargs)
+        axis.imshow(*args_, **kwargs)
     else:
         plt.imshow(*args_, **kwargs)
 
@@ -212,7 +220,7 @@ def bin_spatial(img, color_space='RGB', size=(32, 32)):
 
 
 def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
-        hist_range=(0, 256), vis=False, length=-1):
+        hist_range=(0, 256), vis=False):
     """Extract features using bin_spatial() and color_hist() to generate a feature vector.
 
     Args:
@@ -224,15 +232,12 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
         hist_range: hist range to pass to the `color_hist()` function
         vis: if True, plot the results in a window and also store these visualizations
             to a local folder called './resources' for offline viewing
-        length: if >-1, return a subset of the data that long, otherwise return all
 
     Returns:
         single list of normalized features
 
     """
     features = []
-    if length == -1:
-        length = float('inf')
 
     ctr = 0
     for fname, img, idx in img_data:
@@ -280,8 +285,6 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
             plt.savefig('./resources/features_{}_{}'.format(idx, os.path.basename(fname)))
 
         ctr += 1
-        if ctr == length:
-            break
 
     assert len(features) > 0, 'Got no features.'
 
@@ -327,12 +330,18 @@ def plot3d(pixels, colors_rgb, axis_labels=list("RGB"), axis_limits=((0, 255), (
     return ax
 
 
-def load_data(car_or_not='car', random=False, sanity=False, vis=False):
+def load_data(car_or_not='car', ratio=0.5, length=-1, random=False, sanity=True, vis=False):
     """Load all images from disk. Loads using matplotlib --> range will be 0 to 1.
 
     Args:
         car_or_not: if 'car', return a generator of car images, if 'not', return a generator 
             for images that are not of cars
+        ratio: the ration of car to noncar images to load. E.g. 0.5 means load half as many
+            car images as notcar. This has the effect of biasing the model towards notcar 
+            detection which makes sense because most of the visual space in the images does 
+            not contain a car.
+        length: the amount of data to load per car or notcar, meaning a value of 2500 will
+            try to load 2500 car or notcar images depending on the value of car_or_not
         random: if True, instead of returning a generator for images, return a single fname
             and image selected at random
         sanity: if True print out some info about the data and verify it's consistency
@@ -349,18 +358,41 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
 
     # Verify that all images are of the same shape and dtype
     if sanity:
-        print('Checking that all images have the same size and dtype...')
+        print('Checking that all images have the same size, dtype and range...')
 
-        image_shape = imread(car_fnames[0]).shape
-        data_type = imread(car_fnames[0]).dtype
+        first_img = imread(car_fnames[0])
+        image_shape = first_img.shape
+        data_type = first_img.dtype
+
+        def get_minmax(img):
+            if img.min() <= 1 and img.min() >= 0: 
+                minval = 0
+            elif img.min() < 0:
+                minval = img.min()
+            else:
+                minval = 0
+
+            if img.max() > 1 and img.max() <= 255: 
+                maxval = 255
+            elif img.max() <= 1:
+                maxval =  1
+            else:
+                maxval = img.max()
+            return minval, maxval
+
+        first_minval, first_maxval = get_minmax(first_img)
 
         for fname in car_fnames + notcar_fnames:
-             shape = imread(fname).shape
-             if shape != image_shape:
+             cur_img = imread(fname)
+             curmin, curmax = get_minmax(cur_img)
+             if cur_img.shape != image_shape:
                 raise Exception('Not all images have the same shape. {} was of size {}.'.format(fname, shape))
-             dtype = imread(fname).dtype
-             if dtype != data_type:
+             if cur_img.dtype != data_type:
                 raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, dtype))
+             if curmin != first_minval or curmax != first_maxval:
+                 raise Exception(
+                         """Not all images have the same dinemsions, got: ({}, {}) for {}, but expected ({}, {})"""\
+                                 .format(curmin, curmax, fname, first_minval, first_maxval))
         print('  All images are consistent!')
  
         data = {
@@ -372,6 +404,7 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
 
         print('  Total number of images: {} cars and {} non-cars'.format(data["n_cars"], data["n_notcars"]))
         print('  Image size: {}, data type: {}'.format(data["image_shape"], data["data_type"]))
+        print('  Pixel value range: ({}, {})'.format(first_minval, first_maxval))
 
     if vis:
         # Choose random car / not-car indices and plot example images   
@@ -395,9 +428,18 @@ def load_data(car_or_not='car', random=False, sanity=False, vis=False):
         plt.show()
 
     if car_or_not == 'car':
-        fnames = car_fnames
+        if length < 0:
+            car_length = len(car_fnames)
+        else:
+            car_length = length
+        fnames = np.random.permutation(car_fnames).tolist()[:car_length]
+        fnames = fnames[:int(len(fnames)*ratio)]
     else:
-        fnames = notcar_fnames
+        if length < 0:
+            notcar_length = len(notcar_fnames)
+        else:
+            notcar_length = length
+        fnames = np.random.permutation(notcar_fnames).tolist()[:notcar_length]
 
     ret = []
     if random is True:
@@ -455,20 +497,34 @@ def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False,
         return features
 
 
-def get_xy(length=-1):
+def get_xy(ratio=0.25, length=-1):
     """Load image data and extract features and labels for training
+
+    Args:
+        ratio: the ration of car to noncar images to load. E.g. 0.5 means load half as many
+            car images as notcar. This has the effect of biasing the model towards notcar 
+            detection which makes sense because most of the visual space in the images does 
+            not contain a car.
+        length: the amount of data to load per car or notcar, meaning a value of 2500 will
+            try to load 2500 car or notcar images depending on the value of car_or_not
+
+    Returns:
+        X matrix of features and y vector of labels.
+
     """
 
     print('Loading features and labels...')
 
     cspace = 'YCrCb'
 
-    car_data = load_data(car_or_not='car')
-    notcar_data = load_data(car_or_not='notcar')
+    # Shuffle the data and then remove from cars according to the split ration supplied
+    car_data = load_data(length=length, ratio=ratio, car_or_not='car')
+    notcar_data = load_data(length=length, ratio=ratio, car_or_not='notcar', sanity=False)
+
     car_features = extract_features(car_data, cspace=cspace, spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256), length=length)
+                                    hist_bins=32, hist_range=(0, 256))
     notcar_features = extract_features(notcar_data, cspace=cspace, spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256), length=length)
+                                    hist_bins=32, hist_range=(0, 256))
 
     # Create an array stack of feature vectors
     X_not_scaled = np.vstack((car_features, notcar_features)).astype(np.float32)
@@ -521,12 +577,6 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     # Set the amount of data to use for training the classifier.
     if subset_size is None:
         subset_size = len(y)
-
-    parameters = [
-            {'kernel': ['linear'], 'C': [1, 10, 100, 1000]},
-            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
-        ]
-
     idx = np.random.permutation(X.shape[0])[:subset_size]
     X_subset = X[idx]
     y_subset = y[idx]
@@ -534,20 +584,30 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     X_train, X_test, y_train, y_test = train_test_split(
             X_subset, y_subset, test_size=0.2, random_state=42, shuffle=True)
 
-    print()
-    print('Starting GridSearch...')
-    clf = GridSearchCV(SVC(), parameters, cv=5, verbose=9)
-    clf.fit(X_train, y_train)
-    print('Best Params: {}'.format(clf.best_params_))
-    print('Best Score: {}'.format(clf.best_score_))
+    print('Fitting data...')
 
+    # Parameters for GridSearchCV
+    parameters = [
+            {'kernel': ['linear'], 'C': [0.1]},
+            #{'kernel': ['linear'], 'C': [0.001, 0.01, 1, 10]},
+            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
+        ]
+    #clf = GridSearchCV(SVC(probability=True), parameters, cv=5, verbose=9)
+
+    clf = SVC(kernel='linear', C=0.01, probability=True) 
+    clf.fit(X_train, y_train)
+    print(clf)
+
+    #print('Best Params: {}'.format(clf.best_params_))
+    #print('Best Score: {}'.format(clf.best_score_))
     print('Final score on test set: {}'.format(clf.score(X_test, y_test)))
+
     print()
 
     return clf
 
 
-def predict(img, clf, fname='unknown', car=None, vis=False):
+def predict(img, clf, fname='unknown', car=None, vis=False, verbose=False):
     """Extract features and run the classifier on an image.
     
     Args:
@@ -556,41 +616,47 @@ def predict(img, clf, fname='unknown', car=None, vis=False):
         fname: the filename of the original file containing the image
         car: if known (while testing), whether or not this is a car image
         vis: if True, display a visualization of the pipeline
+        verbose: if True, print stuff
         
     Returns:
-        Prediction and confidence value. The prediction is 1 if the prediction
-            is 'car' or 0 if the prediction is 'not car'
+        The prediction is 1 if the prediction is 'car' or 0 if the prediction is 'not car'
         
     """
+    img = img.copy()
+    img.resize((64, 64, 3))
     features = extract_features([[fname, img, 0]], cspace='YCrCb', vis=vis)
     prediction = int(clf.predict(features)[0])
-    confidence = clf.decision_function(features)[0]
+    probs = clf.predict_proba(features)[0]
 
-    if car is not None:
+    if car is not None or verbose:    # meaning, someone told this method the truth value, so print stuff
         prediction_txt = 'car'
         if prediction == 0:
             prediction_txt = 'notcar'
 
-        result = 'CORRECT'
-        if prediction == 0 and car:
-            result = 'INCORRECT'
-        if prediction == 1 and not car:
-            result = 'INCORRECT'
-        print('{:35}, model predicts {} ({:6}) --> {:9} ({})'.format(
-            fname, prediction, prediction_txt, result, confidence))
+        if car is None:
+            grade = '??????'
+        else:
+            grade = 'CORRECT'
+            if prediction == 0 and car:
+                grade = 'INCORRECT'
+            if prediction == 1 and not car:
+                grade = 'INCORRECT'
 
-    return prediction, confidence
+        print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: (:{}, {} | size: ({}, {}))'.format(
+            fname, prediction, prediction_txt, grade, probs[0], probs[1], img.shape[0], img.shape[1]))
+
+    return prediction
 
 
-def get_window_points(img_size, window_size=(64, 64), clip=0.4, overlap=0.5, start_pos=(0, 0), vis=False):
+def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start=(0, 0), end=(None, None)):
     """Generate top left and bottom right rectangle corners for boundary boxes.
 
     Args:
         img_size: the `img.shape()` of the image/canvas to generate the boxes for, e.g. (960, 1280, 3)
         window_size: the size of the sliding window in (x, y) order
-        clip: proportion of the bottom of the image to retain (e.g. 0.5 means only box the bottom half)
         overlap: by how much should the windows overlap, e.g. 50% would be 0.5
-        start_pos: the (x, y) coordinate to start from
+        start: the (x, y) coordinate to start from
+        end: the (x, y) coordinate in the image to stop at
 
     Returns:
         a list of (top_left, bottom_right) tuples that can be passed to `cv2.rectangle()`
@@ -601,29 +667,25 @@ def get_window_points(img_size, window_size=(64, 64), clip=0.4, overlap=0.5, sta
     x_positions = []
     y_positions = []
 
-    start_x = start_pos[0]
-    while start_x <= img_size[1]-size_x:
+    if end == (None, None):
+        end = (img_size[1], img_size[0])
+
+    start_x = start[0]
+    end_x = end[0]
+    while start_x <= (end_x - size_x):
         x_positions.append((start_x, start_x+size_x))
         start_x += int(size_x*overlap)
 
-    start_y = start_pos[1]
-    while start_y <= img_size[0]-size_y:
+    start_y = start[1]
+    end_y = end[1]
+    while start_y <= (end_y - size_y):
         y_positions.append((start_y, start_y+size_y))
         start_y += int(size_y*overlap)
 
     bboxes = []
-    for y in range(len(y_positions))[int(len(y_positions)*(1-clip)):]:
+    for y in range(len(y_positions)):
         for x in range(len(x_positions)):
             bboxes.append([_ for _ in zip(x_positions[x], y_positions[y])])
-
-    if vis:
-        get_clr = lambda: np.random.randint(255, size=(3))/255.0
-        canvas = np.ones(img_size)
-        for box in bboxes:
-            cv2.rectangle(canvas, box[0], box[1], get_clr())
-
-        plt.imshow(canvas)
-        plt.show()
 
     return bboxes
 
@@ -693,12 +755,13 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None):
     if train is False:
         clf = get_svm_model(model_file=model_file)
     else:
+        if save_file is not None and os.path.exists(save_file): 
+            print('!!!WARNING!!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
+                save_file))
         X, y =  get_xy(length=subset_size)
         clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
 
         if save_file is not None:
-            if os.path.exists(save_file): 
-                print('WARNING!! Overwriting previous model file [{}] now!'.format(save_file))
             pickle.dump(clf, open(save_file, 'wb'))
             print('Model was saved to {}'.format(save_file))
 
@@ -713,140 +776,4 @@ if __name__ == '__main__':
         trainsize = int(args.train_size)
     clf = main(train=train, subset_size=trainsize, save_file=args.save_file, model_file=args.model_file)
 
-
-    ###############################################################
-    #
-    # Test adding boundary boxes
-    #
-    ###############################################################
-    #image = imread('./test_images/bbox-example-image.jpg')
-    #bboxes = [((837, 507), (1120, 669))]
-    #result = draw_boxes(image, bboxes)
-    #imshow(result)()
-    #plt.show()
-
-    ###############################################################
-    #
-    # Muck around with boxing using cv2 image templates
-    #
-    ###############################################################
-    #bboxs = template_matching()
-    #image = imread('./test_images/bbox-example-image.jpg')
-    #image = draw_boxes(image, bboxs)
-    #imshow(image)()
-    #plt.show()
-
-    ###############################################################
-    #
-    # Show color histogram for color space
-    #
-    ###############################################################
-    #img = imread('test_images/cutout1.jpg')
-    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img, cspace='YCrCb', vis=True)
-    #fig = plt.figure(figsize=(12,3))
-    #plt.subplot(131)
-    #plt.bar(bin_centers, rhist[0])
-    #plt.xlim(0, 256)
-    #plt.title('R Histogram')
-    #plt.subplot(132)
-    #plt.bar(bin_centers, ghist[0])
-    #plt.xlim(0, 256)
-    #plt.title('G Histogram')
-    #plt.subplot(133)
-    #plt.bar(bin_centers, bhist[0])
-    #plt.xlim(0, 256)
-    #plt.title('B Histogram')
-    #plt.show()
-
-
-    ###############################################################
-    #
-    # Explore RGB and HSV color spaces in 3D
-    #
-    ###############################################################
-    ##files = glob.glob('./test_images/[0-9][0-9].png')
-    #files = glob.glob('./test_images/*.png')
-    #for f in files:
-    #    print(f)
-    #    img = imread(f)
-    #    
-    #    # Select a small fraction of pixels to plot by subsampling it
-    #    scale = max(img.shape[0], img.shape[1], 64) / 64  # at most 64 rows and columns
-    #    img_small = cv2.resize(img, (np.int(img.shape[1] / scale),
-    #        np.int(img.shape[0] / scale)), interpolation=cv2.INTER_NEAREST)
-    #    
-    #    # Convert subsampled image to desired color space(s)
-    #    img_small_RGB = img_small
-    #    img_small_HSV = cv2.cvtColor(img_small, cv2.COLOR_RGB2HSV)
-    #    img_small_HLS = cv2.cvtColor(img_small, cv2.COLOR_RGB2HLS)
-    #    img_small_YCR = cv2.cvtColor(img_small, cv2.COLOR_RGB2YCrCb)
-    #    img_small_rgb = img_small_RGB / 255.  # scaled to [0, 1], only for plotting
-    #    
-    #    # Plot and show
-    #    plot3d(img_small_RGB, img_small_rgb, axis_labels=list("RGB"))
-    #    plt.show()
-    #    
-    #    plot3d(img_small_HSV, img_small_rgb, axis_labels=list("HSV"))
-    #    plt.show()
-
-    #    plot3d(img_small_HLS, img_small_rgb, axis_labels=list("HLS"))
-    #    plt.show()
-
-    #    plot3d(img_small_YCR, img_small_rgb, axis_labels=list("YCrCb"))
-    #    plt.show()
-
-
-    ###############################################################
-    #
-    # Resizing images
-    #
-    ###############################################################
-
-    #image = imread('test_images/cutout1.jpg')
-    #feature_vec = bin_spatial(image, color_space='LUV', size=(32, 32))
-    ## Plot features
-    #plt.plot(feature_vec)
-    #plt.title('Spatially Binned Features')
-    #plt.show()
-    ## Question - can we scale down even further? Consider this when training classifier
-
-    ###############################################################
-    #
-    # Test the HOG function
-    #
-    ###############################################################
-
-    # Generate a random index to look at a car image
-    #d = load_data(car_or_not='car', random=True)
-    #fname, image, idx = d[0]
-
-    ## Convert to gray before sending to HOG
-    #gray = rgb2gray(image)
-
-    ## Define HOG parameters
-    #orient = 9
-    #pix_per_cell = 8
-    #cell_per_block = 2
-
-    ## Call our function with vis=True to see an image output
-    #features, hog_image = get_hog_features(
-    #        gray, orient, pix_per_cell, cell_per_block, vis=True, feature_vec=False)
-
-    ## Plot the examples
-    #fig = plt.figure()
-    #plt.subplot(121)
-    #imshow(image, cmap='gray')()
-    #plt.title('Example Car Image')
-    #plt.subplot(122)
-    #plt.imshow(hog_image, cmap='gray')
-    #plt.title('HOG Visualization')
-    #plt.show()
-
-
-    ###############################################################
-    #
-    # Sanity check the data
-    #
-    ###############################################################
-    #_ = load_data(sanity=True)
 
