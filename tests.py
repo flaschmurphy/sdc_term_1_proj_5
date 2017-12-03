@@ -96,23 +96,17 @@ def test_windowing():
         canvas1 = imread(fname)
         for box in bboxes_full:
             cv2.rectangle(canvas1, box[0], box[1], get_clr(), 3)
-        # Normalize for pyplot weirdness
-        #canvas1 /= 255
-        ax1.imshow(canvas1)
+        imshow(canvas1, axis=ax1)
 
         canvas2 = imread(fname)
         for box in bboxes_partial:
             cv2.rectangle(canvas2, box[0], box[1], get_clr(), 3)
-        # Normalize for pyplot weirdness
-        #canvas2 /= 255
-        ax2.imshow(canvas2)
+        imshow(canvas2, axis=ax2)
 
         canvas3 = imread(fname)
         for box in bboxes_clipped:
             cv2.rectangle(canvas3, box[0], box[1], get_clr(), 3)
-        # Normalize for pyplot weirdness
-        #canvas3 /= 255
-        ax3.imshow(canvas3)
+        imshow(canvas3, axis=ax3)
 
         plt.tight_layout()
         plt.show()
@@ -123,18 +117,22 @@ def test_windowing():
     print()
 
 
-def test_sliding_window_predictions():
+def test_sliding_window_predictions(fname=None):
     """Test that a sliding window slides as expected and detects cars"""
     #
     # Run a scan over an image and retain any boxes where a car is detected
     #
-    img = imread('./test_images/bbox-example-image.jpg')
-    img_size = (720, 1280, 3)
+    if fname is None:
+        img = imread('./test_images/bbox-example-image.jpg')
+    else:
+        img = imread(fname)
+        print('Loaded {} with shape {}'.format(fname, img.shape))
     window_size = (64, 64)
     overlap = 0.5
-    start_pos = (256, 510)
+    #start_pos = (256, 510)
+    start_pos = (256, 446)
     end_pos = (1024, 576)
-    bboxes = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
     car_boxes = []
 
     # If True, show realtime visualizations
@@ -152,6 +150,7 @@ def test_sliding_window_predictions():
 
     get_clr = lambda: np.random.randint(255, size=3).tolist()
 
+    cnt = 0
     for box in bboxes:
         top_left, bottom_right = box
         sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
@@ -175,15 +174,17 @@ def test_sliding_window_predictions():
             plt.sca(ax2)
             plt.cla()
 
-            # The indexing and operation below converts BGR to RGB and normalizes to range 0,1
-            #ax1.imshow(display_img_[:,:,::-1]/255)
-            #ax2.imshow(sub_img[:,:,::-1]/255)
             imshow(display_img_, axis=ax1)
             imshow(sub_img, axis=ax2)
+            new_fname = './training_images/my_images/notcar/{}_{:03}.png'.format(
+                    os.path.basename(fname).split('.')[0], cnt)
+            imsave(new_fname, sub_img)
 
             plt.tight_layout()
             plt.show()
             plt.pause(0.0001)
+
+            cnt += 1
 
     end = time.clock()
     duration = end - start
@@ -192,7 +193,8 @@ def test_sliding_window_predictions():
     plt.cla()
     ax1.imshow(display_img[:,:,::-1]/255)
     plt.show()
-    plt.pause(10)
+    plt.pause(1)
+    plt.close()
 
     print('Prcessing one image took {:.3}s in CPU time.'.format(duration))
 
@@ -200,7 +202,9 @@ def test_sliding_window_predictions():
 def main():
     #test_predictions()
     #test_windowing()
-    test_sliding_window_predictions()
+    #test_sliding_window_predictions()
+    for fname in glob.glob('./test_frames/*'):
+        test_sliding_window_predictions(fname)
 
 
 if __name__ == '__main__':

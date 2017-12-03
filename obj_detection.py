@@ -29,8 +29,6 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-#CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
-#NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
 CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
 
@@ -82,6 +80,11 @@ def imshow(*args, **kwargs):
         axis.imshow(*args_, **kwargs)
     else:
         plt.imshow(*args_, **kwargs)
+
+
+def imsave(fname, img):
+    """Save an image to disk in a consistent way"""
+    cv2.imwrite(fname, img)
 
 
 def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
