@@ -13,10 +13,19 @@ import time
 import cv2
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+from argparse import ArgumentParser
 
 from obj_detection import *
 
-MODEL_FILE = 'model_05k.pkl'
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('-c', '--classifier', dest='clf', required=True,
+            help='The location of the pickled classifier')
+
+    args = parser.parse_args()
+    return args
+
 
 def test_predictions():
     """Test a sequence of images on `predict()`."""
@@ -26,7 +35,7 @@ def test_predictions():
     car_fnames = glob.glob('./test_images/car_*')
     notcar_fnames = glob.glob('./test_images/notcar_*')
 
-    with open(MODEL_FILE, 'rb') as f:
+    with open(args.clf, 'rb') as f:
         clf = pickle.load(f)
 
     for fname in car_fnames:
@@ -51,13 +60,14 @@ def test_windowing():
     #
     print('Testing `get_window_points()` on a full image...')
     img_size = (720, 1280, 3)
-    window_size = (64, 64)
+    window_size = (128, 128)
     overlap = 0.5
     start_pos = (0, 0)
     end_pos = (None, None)
     bboxes_full = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    assert len(bboxes_full) == 819, 'Incorrect number of windows, got {}, should be 819.'.format(
-            len(bboxes_full))
+    #assert len(bboxes_full) == 819, 'Incorrect number of windows, got {}, should be 819.'.format(
+    #        len(bboxes_full))
+
     #
     # Partial image test - a band covering the bottom third of the frame
     #
@@ -123,14 +133,15 @@ def test_sliding_window_predictions(fname=None):
     # Run a scan over an image and retain any boxes where a car is detected
     #
     if fname is None:
-        img = imread('./test_images/bbox-example-image.jpg')
+        #img = imread('./test_images/bbox-example-image.jpg')
+        img = imread('./test_frames/frame_040.png')
     else:
         img = imread(fname)
         print('Loaded {} with shape {}'.format(fname, img.shape))
-    window_size = (64, 64)
+    window_size = (128, 128)
     overlap = 0.5
     #start_pos = (256, 510)
-    start_pos = (256, 446)
+    start_pos = (256, 382)
     end_pos = (1024, 576)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
     car_boxes = []
@@ -146,7 +157,7 @@ def test_sliding_window_predictions(fname=None):
     start = time.clock()
 
     # Load the classifier
-    clf = get_svm_model(model_file=MODEL_FILE)
+    clf = get_svm_model(model_file=args.clf)
 
     get_clr = lambda: np.random.randint(255, size=3).tolist()
 
@@ -176,9 +187,11 @@ def test_sliding_window_predictions(fname=None):
 
             imshow(display_img_, axis=ax1)
             imshow(sub_img, axis=ax2)
-            new_fname = './training_images/my_images/notcar/{}_{:03}.png'.format(
-                    os.path.basename(fname).split('.')[0], cnt)
-            imsave(new_fname, sub_img)
+
+            # Uncomment below to save frames while running
+            #new_fname = './training_images/my_images/notcar/{}_{:03}_2.png'.format(
+            #        os.path.basename(fname).split('.')[0], cnt)
+            #imsave(new_fname, sub_img)
 
             plt.tight_layout()
             plt.show()
@@ -200,149 +213,17 @@ def test_sliding_window_predictions(fname=None):
 
         
 def main():
+    global args
+    args = parse_args()
+
     #test_predictions()
     #test_windowing()
-    #test_sliding_window_predictions()
+    test_sliding_window_predictions()
     for fname in glob.glob('./test_frames/*'):
         test_sliding_window_predictions(fname)
 
+    pass
 
 if __name__ == '__main__':
     main()
-
-    ###############################################################
-    #
-    # Test adding boundary boxes
-    #
-    ###############################################################
-    #image = imread('./test_images/bbox-example-image.jpg')
-    #bboxes = [((837, 507), (1120, 669))]
-    #result = draw_boxes(image, bboxes)
-    #imshow(result)()
-    #plt.show()
-
-    ###############################################################
-    #
-    # Muck around with boxing using cv2 image templates
-    #
-    ###############################################################
-    #bboxs = template_matching()
-    #image = imread('./test_images/bbox-example-image.jpg')
-    #image = draw_boxes(image, bboxs)
-    #imshow(image)()
-    #plt.show()
-
-    ###############################################################
-    #
-    # Show color histogram for color space
-    #
-    ###############################################################
-    #img = imread('test_images/cutout1.jpg')
-    #rhist, ghist, bhist, hist_features, bin_centers = color_hist(img, cspace='YCrCb', vis=True)
-    #fig = plt.figure(figsize=(12,3))
-    #plt.subplot(131)
-    #plt.bar(bin_centers, rhist[0])
-    #plt.xlim(0, 256)
-    #plt.title('R Histogram')
-    #plt.subplot(132)
-    #plt.bar(bin_centers, ghist[0])
-    #plt.xlim(0, 256)
-    #plt.title('G Histogram')
-    #plt.subplot(133)
-    #plt.bar(bin_centers, bhist[0])
-    #plt.xlim(0, 256)
-    #plt.title('B Histogram')
-    #plt.show()
-
-
-    ###############################################################
-    #
-    # Explore RGB and HSV color spaces in 3D
-    #
-    ###############################################################
-    ##files = glob.glob('./test_images/[0-9][0-9].png')
-    #files = glob.glob('./test_images/*.png')
-    #for f in files:
-    #    print(f)
-    #    img = imread(f)
-    #    
-    #    # Select a small fraction of pixels to plot by subsampling it
-    #    scale = max(img.shape[0], img.shape[1], 64) / 64  # at most 64 rows and columns
-    #    img_small = cv2.resize(img, (np.int(img.shape[1] / scale),
-    #        np.int(img.shape[0] / scale)), interpolation=cv2.INTER_NEAREST)
-    #    
-    #    # Convert subsampled image to desired color space(s)
-    #    img_small_RGB = img_small
-    #    img_small_HSV = cv2.cvtColor(img_small, cv2.COLOR_RGB2HSV)
-    #    img_small_HLS = cv2.cvtColor(img_small, cv2.COLOR_RGB2HLS)
-    #    img_small_YCR = cv2.cvtColor(img_small, cv2.COLOR_RGB2YCrCb)
-    #    img_small_rgb = img_small_RGB / 255.  # scaled to [0, 1], only for plotting
-    #    
-    #    # Plot and show
-    #    plot3d(img_small_RGB, img_small_rgb, axis_labels=list("RGB"))
-    #    plt.show()
-    #    
-    #    plot3d(img_small_HSV, img_small_rgb, axis_labels=list("HSV"))
-    #    plt.show()
-
-    #    plot3d(img_small_HLS, img_small_rgb, axis_labels=list("HLS"))
-    #    plt.show()
-
-    #    plot3d(img_small_YCR, img_small_rgb, axis_labels=list("YCrCb"))
-    #    plt.show()
-
-
-    ###############################################################
-    #
-    # Resizing images
-    #
-    ###############################################################
-
-    #image = imread('test_images/cutout1.jpg')
-    #feature_vec = bin_spatial(image, color_space='LUV', size=(32, 32))
-    ## Plot features
-    #plt.plot(feature_vec)
-    #plt.title('Spatially Binned Features')
-    #plt.show()
-    ## Question - can we scale down even further? Consider this when training classifier
-
-    ###############################################################
-    #
-    # Test the HOG function
-    #
-    ###############################################################
-
-    # Generate a random index to look at a car image
-    #d = load_data(car_or_not='car', random=True)
-    #fname, image, idx = d[0]
-
-    ## Convert to gray before sending to HOG
-    #gray = rgb2gray(image)
-
-    ## Define HOG parameters
-    #orient = 9
-    #pix_per_cell = 8
-    #cell_per_block = 2
-
-    ## Call our function with vis=True to see an image output
-    #features, hog_image = get_hog_features(
-    #        gray, orient, pix_per_cell, cell_per_block, vis=True, feature_vec=False)
-
-    ## Plot the examples
-    #fig = plt.figure()
-    #plt.subplot(121)
-    #imshow(image, cmap='gray')()
-    #plt.title('Example Car Image')
-    #plt.subplot(122)
-    #plt.imshow(hog_image, cmap='gray')
-    #plt.title('HOG Visualization')
-    #plt.show()
-
-
-    ###############################################################
-    #
-    # Sanity check the data
-    #
-    ###############################################################
-    #_ = load_data(sanity=True)
 

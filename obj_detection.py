@@ -31,16 +31,18 @@ from mpl_toolkits.mplot3d import Axes3D
 
 CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
+NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar/*.png')
 
 
 def parse_args():
     parser = ArgumentParser()
     model_group = parser.add_mutually_exclusive_group(required=True)
     model_group.add_argument('-t', '--train', dest='train_size',
-            help="""Include the training step and use TRAIN value as the number of samples to 
+            help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
             use for training on. Specify '-1' to train on all available data. If not including 
             training, must specify a model to load from disk (a previously pickled one) 
-            using the `-m` switch.""")
+            using the `-m` switch. The number of car samples loaded for training will be porportional
+            to the number of notcar samples specified here.""")
     model_group.add_argument('-m', '--model', dest='model_file', 
             help="""Where to find a previously pickled model file to use instead of training""")
     parser.add_argument('-s', '--save', dest='save_file', 
@@ -54,8 +56,15 @@ def parse_args():
     return args
 
 
+#######################################################################################################
+#
+# Helper functions
+#
+#######################################################################################################
+
 def imread(fname, for_prediction=False):
-    """Helper function to always load images in a consistent way"""
+    """Helper function to always load images in a consistent way. Note that since we're using cv2
+    to load the images, they will be in BGR by default,"""
     img = cv2.imread(fname).astype(np.float32)
     if int(img.max()) <= 1:
         print('!!! WARNING !!! Image does not apper to be the right scale, found ({}, {}) for {}.'.format(
@@ -87,28 +96,13 @@ def imsave(fname, img):
     cv2.imwrite(fname, img)
 
 
-def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
-    """Draw a rectangular box over an image
+#######################################################################################################
+#
+# Pipeline functions
+#
+#######################################################################################################
 
-    Args:
-        img: the image to draw over
-        bboxes: list of box points, [(top left, bottom right), ...]
-        color: RGB color
-        thick: thickness
-
-    Returns:
-        a copy of the original image with the boxes added
-
-    """
-    draw_img = np.copy(img)
-
-    for b in bboxes:
-        cv2.rectangle(draw_img, b[0], b[1], color, thick)
-
-    return draw_img 
-
-
-def find_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
+def get_template_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
     """Define a function to search for template matches and return a list of
     bounding boxes. Code is from lesson 9 of the project. This method should
     not be used as it is not portable. Template matching will only work when
@@ -151,8 +145,9 @@ def find_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
     return bbox_list
 
 
-def color_hist(img, nbins=32, bins_range=(0, 256), vis=False):
+def get_colorhist(img, nbins=32, bins_range=(0, 256), vis=False):
     """Generate a histogram of color channels (RGB).
+
     Args:
         img: the imput image
         nbins: the number of bins in the histogram
@@ -181,58 +176,91 @@ def color_hist(img, nbins=32, bins_range=(0, 256), vis=False):
     bin_edges = ch1_hist[1]
     bin_centers = (bin_edges[1:] + bin_edges[0:len(bin_edges)-1])/2
 
+    assert len(hist_features) > 0, 'Got no color historgram for image'
+
     return ch1_hist, ch2_hist, ch3_hist, hist_features, bin_centers
 
 
-def bin_spatial(img, color_space='RGB', size=(32, 32)):
+def get_spatial(img, size=(32, 32)):
     """Convert an image to the provided color space, rescale it and unroll it.
 
     Args:
         img: the input image (assumed to be in RGB color space)
-        color_space: target color space to convert to
         size: target size to scale to
 
     Returns:
         one dimensional feature vector of the converted image
 
     """
-
+    img = img.copy()
     assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
-    assert color_space in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
+    features = cv2.resize(img, size).ravel()
+    assert len(features) > 0, 'Got no spatial features for image'
+    return features
 
-    if color_space == 'BGR':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2RGB)
-    elif color_space == 'HSV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-    elif color_space == 'LUV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
-    elif color_space == 'HLS':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    elif color_space == 'YUV':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
-    elif color_space == 'YCrCb':
-        feature_image = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
-    else: 
-        feature_image = np.copy(img)
 
-    assert feature_image.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
+    """Get a Histogram of Oriented Gradients for an image.
 
-    features = cv2.resize(feature_image, size).ravel()
+    "Note: you could also include a keyword to set the tranform_sqrt flag but
+    for this exercise you can just leave this at the default value of
+    transform_sqrt=False"
+
+    Args:
+        img: the input image
+        orient: the number of orientation bins in the output histogram. Typical values are between 6 and 12
+        pix_per_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
+        cells_per_block: a 2-tuple giving the number of cells per block
+        channel: which of the 3 color channels to get the HOG for, or 'all'
+
+    Returns:
+        (features, hog_image) were the features are rolled out as a 1-D vector
+
+    """
+    assert channel in [0, 1, 2, 'all'], "Invalid channel specified, must be one of [0, 1, 2 'all']"
+    img = img.copy()
+    if channel == 'all':
+        all_features = []
+        for i in (0, 1, 2):
+            features, hog_image = hog(
+                    img[:,:,i], 
+                    orientations=orient,
+                    pixels_per_cell=(pix_per_cell, pix_per_cell), 
+                    cells_per_block=(cell_per_block, cell_per_block), 
+                    transform_sqrt=False,
+                    visualise=True, 
+                    feature_vector=True,
+                    block_norm="L2-Hys"
+                )
+            all_features.append(features)
+        features = np.hstack(all_features).ravel()
+    else:
+        features, hog_image = hog(
+                img[:,:,channel], 
+                orientations=orient,
+                pixels_per_cell=(pix_per_cell, pix_per_cell), 
+                cells_per_block=(cell_per_block, cell_per_block), 
+                transform_sqrt=False,
+                visualise=True, 
+                feature_vector=True,
+                block_norm="L2-Hys"
+            )
+        features = features.ravel()
 
     return features
 
 
-def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32, 
+def pipeline(img_data, cspace='YUV', spatial_size=(32, 32), hist_bins=32, 
         hist_range=(0, 256), vis=False):
-    """Extract features using bin_spatial() and color_hist() to generate a feature vector.
+    """Extract features to generate a feature vector.
 
     Args:
         img_data: a list of 3-tuples containing (filename, RGB image, idx) where idx is the index of 
             where that image was found in the original training data
-        cspace: color space to pass to `bin_spatial()`
+        cspace: color space to use for generating the features
         spacial_size: input to be used for the `bin_spacial()` function
-        hist_bins: number of bins for the `color_hist()` function
-        hist_range: hist range to pass to the `color_hist()` function
+        hist_bins: number of bins for the `get_colorhist()` function
+        hist_range: hist range to pass to the `get_colorhist()` function
         vis: if True, plot the results in a window and also store these visualizations
             to a local folder called './resources' for offline viewing
 
@@ -240,44 +268,70 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
         single list of normalized features
 
     """
+    assert cspace in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
+
+    print('Extracting features...')
     features = []
 
     ctr = 0
+    scaler = StandardScaler()
     for fname, img, idx in img_data:
         assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
-        spatial_features = bin_spatial(img, color_space=cspace, size=spatial_size)
-        assert len(spatial_features) > 0, 'Got no data back from bin_spatial for image {} at position {},'.format(
-                fname, idx)
+        img_orig = img.copy()
 
-        hist_features = color_hist(img, nbins=hist_bins, bins_range=hist_range)
-        assert len(hist_features) > 0, 'Got no data back from color_hist for image {}  at position {},'.format(
-                fname, idx)
+        if cspace == 'BGR':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB)
+        elif cspace == 'HSV':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
+        elif cspace == 'LUV':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2LUV)
+        elif cspace == 'HLS':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HLS)
+        elif cspace == 'YUV':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2YUV)
+        elif cspace == 'YCrCb':
+            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2YCrCb)
+        else: 
+            img = img_orig
+        assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
-        features.append(np.concatenate((spatial_features, hist_features)).astype(np.float32))
+        spatial_features = get_spatial(img, size=spatial_size)
+        color_features = get_colorhist(img, nbins=hist_bins, bins_range=hist_range)
+        hog_features = get_hog(img)
+
+        features.append(np.concatenate((
+                spatial_features, 
+                color_features, 
+                hog_features,
+           )).astype(np.float32))
 
         plt.ion()
         if vis is True and ctr % 100 == 0:
             if not os.path.exists('./resources'):
-                os.mkdir('./resources')
+               os.mkdir('./resources')
 
             plt.clf()
             fig = plt.gcf()
-            fig.set_size_inches(18.5, 5, forward=True)
+            fig.set_size_inches(24, 5, forward=True)
 
-            plt.subplot(141)
+            plt.subplot(151)
             imshow(img)
             plt.title('Original Image')
 
-            plt.subplot(142)
+            plt.subplot(152)
             plt.plot(spatial_features)
             plt.title('Spatial')
 
-            plt.subplot(143)
-            plt.plot(hist_features)
+            plt.subplot(153)
+            plt.plot(color_features)
             plt.title('Color')
 
-            plt.subplot(144)
+            plt.subplot(154)
+            plt.plot(hog_features)
+            plt.title('HOG')
+
+            plt.subplot(155)
             plt.plot(features[-1])
             plt.title('Feature Extraction ({})'.format(cspace))
 
@@ -289,51 +343,20 @@ def extract_features(img_data, cspace='RGB', spatial_size=(32, 32), hist_bins=32
 
         ctr += 1
 
-    assert len(features) > 0, 'Got no features.'
+    assert len(features) > 0, 'Got no features'
+
+    print('Extracted features were length {:,}'.format(len(features[0])))
 
     return features
 
 
-def plot3d(pixels, colors_rgb, axis_labels=list("RGB"), axis_limits=((0, 255), (0, 255), (0, 255))):
-    """Plot pixels in 3D.
+#######################################################################################################
+#
+# Data functions
+#
+#######################################################################################################
 
-    Args:
-        pixels: the input image
-        colors_rgb: image in RGB scaled to [0,1] for plotting
-        axis_labels: labels for the axis
-        axis_limits: axis limits
-
-    Returns:
-       Axes3D object for further manipulation
-
-    """
-
-    # Create figure and 3D axes
-    fig = plt.figure(figsize=(8, 8))
-    ax = Axes3D(fig)
-
-    # Set axis limits
-    ax.set_xlim(*axis_limits[0])
-    ax.set_ylim(*axis_limits[1])
-    ax.set_zlim(*axis_limits[2])
-
-    # Set axis labels and sizes
-    ax.tick_params(axis='both', which='major', labelsize=14, pad=8)
-    ax.set_xlabel(axis_labels[0], fontsize=16, labelpad=16)
-    ax.set_ylabel(axis_labels[1], fontsize=16, labelpad=16)
-    ax.set_zlabel(axis_labels[2], fontsize=16, labelpad=16)
-
-    # Plot pixel values with colors given in colors_rgb
-    ax.scatter(
-        pixels[:, :, 0].ravel(),
-        pixels[:, :, 1].ravel(),
-        pixels[:, :, 2].ravel(),
-        c=colors_rgb.reshape((-1, 3)), edgecolors='none')
-
-    return ax
-
-
-def load_data(car_or_not='car', ratio=0.5, length=-1, random=False, sanity=True, vis=False):
+def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, vis=False):
     """Load all images from disk. Loads using matplotlib --> range will be 0 to 1.
 
     Args:
@@ -435,8 +458,7 @@ def load_data(car_or_not='car', ratio=0.5, length=-1, random=False, sanity=True,
             car_length = len(car_fnames)
         else:
             car_length = length
-        fnames = np.random.permutation(car_fnames).tolist()[:car_length]
-        fnames = fnames[:int(len(fnames)*ratio)]
+        fnames = np.random.permutation(car_fnames).tolist()[:int(car_length*ratio)]
     else:
         if length < 0:
             notcar_length = len(notcar_fnames)
@@ -458,56 +480,10 @@ def load_data(car_or_not='car', ratio=0.5, length=-1, random=False, sanity=True,
     return ret
 
 
-def get_hog_features(img, orient=9, pix_per_cell=9, cell_per_block=2, vis=False, feature_vec=True):
-    """Get a Histogram of Oriented Gradients for an image.
-
-    "Note: you could also include a keyword to set the tranform_sqrt flag but
-    for this exercise you can just leave this at the default value of
-    transform_sqrt=False"
-
-    Args:
-        img: a single channel (or gray) image
-        orient: the number of orientation bins in the output histogram. Typical values are between 6 and 12
-        pix_per_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
-        cells_per_block: a 2-tuple giving the number of cells per block
-        vis: if True, return a visualization of the HOG
-        feature_vec: if True, return the unroll the features vector before returning it
-
-    Returns:
-        Features vector if visualize is False, or (features vector, hog_image) otherwise.
-        If feature_vec is True, the returned features will be already unrolled.
-
-    """
-    ret = hog(
-            img, 
-            orientations=orient,
-            pixels_per_cell=(pix_per_cell, pix_per_cell), 
-            cells_per_block=(cell_per_block, cell_per_block), 
-            transform_sqrt=False,
-            visualise=vis, 
-            feature_vector=feature_vec,
-            block_norm="L2-Hys"
-        )
-
-    if vis is True:
-        features, hog_image = ret
-        if feature_vec:
-            features = features.ravel()
-        return features, hog_image
-    else:
-        if feature_vec:
-            features = ret.ravel()
-        return features
-
-
-def get_xy(ratio=0.25, length=-1):
+def get_xy(length=-1):
     """Load image data and extract features and labels for training
 
     Args:
-        ratio: the ration of car to noncar images to load. E.g. 0.5 means load half as many
-            car images as notcar. This has the effect of biasing the model towards notcar 
-            detection which makes sense because most of the visual space in the images does 
-            not contain a car.
         length: the amount of data to load per car or notcar, meaning a value of 2500 will
             try to load 2500 car or notcar images depending on the value of car_or_not
 
@@ -520,13 +496,12 @@ def get_xy(ratio=0.25, length=-1):
 
     cspace = 'YCrCb'
 
-    # Shuffle the data and then remove from cars according to the split ration supplied
-    car_data = load_data(length=length, ratio=ratio, car_or_not='car')
-    notcar_data = load_data(length=length, ratio=ratio, car_or_not='notcar', sanity=False)
+    car_data = load_data(length=length, car_or_not='car')
+    notcar_data = load_data(length=length, car_or_not='notcar', sanity=False)
 
-    car_features = extract_features(car_data, cspace=cspace, spatial_size=(32, 32),
+    car_features = pipeline(car_data, cspace=cspace, spatial_size=(32, 32),
                                     hist_bins=32, hist_range=(0, 256))
-    notcar_features = extract_features(notcar_data, cspace=cspace, spatial_size=(32, 32),
+    notcar_features = pipeline(notcar_data, cspace=cspace, spatial_size=(32, 32),
                                     hist_bins=32, hist_range=(0, 256))
 
     # Create an array stack of feature vectors
@@ -541,7 +516,7 @@ def get_xy(ratio=0.25, length=-1):
     y = np.append(car_labels, notcar_labels)
 
     print('Loaded, extracted features, scaled and labeled {:,} images, {:,} cars and {:,} not cars'.format(
-        len(y), len(car_features), len(notcar_features)))
+        len(y), len(car_data), len(notcar_data)))
 
     return X, y
 
@@ -591,7 +566,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
 
     # Parameters for GridSearchCV
     parameters = [
-            {'kernel': ['linear'], 'C': [0.1]},
+            {'kernel': ['linear'], 'C': [1]},
             #{'kernel': ['linear'], 'C': [0.001, 0.01, 1, 10]},
             #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
         ]
@@ -627,8 +602,12 @@ def predict(img, clf, fname='unknown', car=None, vis=False, verbose=False):
     """
     img = img.copy()
     img.resize((64, 64, 3))
-    features = extract_features([[fname, img, 0]], cspace='YCrCb', vis=vis)
-    prediction = int(clf.predict(features)[0])
+    features = pipeline([[fname, img, 0]], vis=vis)
+
+    scaler = StandardScaler()
+    features = scaler.fit_transform(features)
+
+    prediction = clf.predict(features)[0]
     probs = clf.predict_proba(features)[0]
 
     if car is not None or verbose:    # meaning, someone told this method the truth value, so print stuff
@@ -645,53 +624,17 @@ def predict(img, clf, fname='unknown', car=None, vis=False, verbose=False):
             if prediction == 1 and not car:
                 grade = 'INCORRECT'
 
-        print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: (:{}, {} | size: ({}, {}))'.format(
+        print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: ({}, {}) | size: ({}, {}))'.format(
             fname, prediction, prediction_txt, grade, probs[0], probs[1], img.shape[0], img.shape[1]))
 
     return prediction
 
 
-def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start=(0, 0), end=(None, None)):
-    """Generate top left and bottom right rectangle corners for boundary boxes.
-
-    Args:
-        img_size: the `img.shape()` of the image/canvas to generate the boxes for, e.g. (960, 1280, 3)
-        window_size: the size of the sliding window in (x, y) order
-        overlap: by how much should the windows overlap, e.g. 50% would be 0.5
-        start: the (x, y) coordinate to start from
-        end: the (x, y) coordinate in the image to stop at
-
-    Returns:
-        a list of (top_left, bottom_right) tuples that can be passed to `cv2.rectangle()`
-
-    """
-
-    size_x, size_y = window_size
-    x_positions = []
-    y_positions = []
-
-    if end == (None, None):
-        end = (img_size[1], img_size[0])
-
-    start_x = start[0]
-    end_x = end[0]
-    while start_x <= (end_x - size_x):
-        x_positions.append((start_x, start_x+size_x))
-        start_x += int(size_x*overlap)
-
-    start_y = start[1]
-    end_y = end[1]
-    while start_y <= (end_y - size_y):
-        y_positions.append((start_y, start_y+size_y))
-        start_y += int(size_y*overlap)
-
-    bboxes = []
-    for y in range(len(y_positions)):
-        for x in range(len(x_positions)):
-            bboxes.append([_ for _ in zip(x_positions[x], y_positions[y])])
-
-    return bboxes
-
+#######################################################################################################
+#
+# Main function
+#
+#######################################################################################################
 
 def main(train=False, save_file=None, subset_size=-1, model_file=None):
     """Main entry point.
@@ -767,6 +710,93 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None):
         if save_file is not None:
             pickle.dump(clf, open(save_file, 'wb'))
             print('Model was saved to {}'.format(save_file))
+
+
+#######################################################################################################
+#
+# Other functions
+#
+#######################################################################################################
+
+def plot3d(pixels, colors_rgb, axis_labels=list("RGB"), axis_limits=((0, 255), (0, 255), (0, 255))):
+    """Plot pixels in 3D.
+
+    Args:
+        pixels: the input image
+        colors_rgb: image in RGB scaled to [0,1] for plotting
+        axis_labels: labels for the axis
+        axis_limits: axis limits
+
+    Returns:
+       Axes3D object for further manipulation
+
+    """
+
+    # Create figure and 3D axes
+    fig = plt.figure(figsize=(8, 8))
+    ax = Axes3D(fig)
+
+    # Set axis limits
+    ax.set_xlim(*axis_limits[0])
+    ax.set_ylim(*axis_limits[1])
+    ax.set_zlim(*axis_limits[2])
+
+    # Set axis labels and sizes
+    ax.tick_params(axis='both', which='major', labelsize=14, pad=8)
+    ax.set_xlabel(axis_labels[0], fontsize=16, labelpad=16)
+    ax.set_ylabel(axis_labels[1], fontsize=16, labelpad=16)
+    ax.set_zlabel(axis_labels[2], fontsize=16, labelpad=16)
+
+    # Plot pixel values with colors given in colors_rgb
+    ax.scatter(
+        pixels[:, :, 0].ravel(),
+        pixels[:, :, 1].ravel(),
+        pixels[:, :, 2].ravel(),
+        c=colors_rgb.reshape((-1, 3)), edgecolors='none')
+
+    return ax
+
+
+def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start=(0, 0), end=(None, None)):
+    """Generate top left and bottom right rectangle corners for boundary boxes.
+
+    Args:
+        img_size: the `img.shape()` of the image/canvas to generate the boxes for, e.g. (960, 1280, 3)
+        window_size: the size of the sliding window in (x, y) order
+        overlap: by how much should the windows overlap, e.g. 50% would be 0.5
+        start: the (x, y) coordinate to start from
+        end: the (x, y) coordinate in the image to stop at
+
+    Returns:
+        a list of (top_left, bottom_right) tuples that can be passed to `cv2.rectangle()`
+
+    """
+
+    size_x, size_y = window_size
+    x_positions = []
+    y_positions = []
+
+    if end == (None, None):
+        end = (img_size[1], img_size[0])
+
+    start_x = start[0]
+    end_x = end[0]
+    while start_x <= (end_x - size_x):
+        x_positions.append((start_x, start_x+size_x))
+        start_x += int(size_x*overlap)
+
+    start_y = start[1]
+    end_y = end[1]
+    while start_y <= (end_y - size_y):
+        y_positions.append((start_y, start_y+size_y))
+        start_y += int(size_y*overlap)
+
+    bboxes = []
+    for y in range(len(y_positions)):
+        for x in range(len(x_positions)):
+            bboxes.append([_ for _ in zip(x_positions[x], y_positions[y])])
+
+    return bboxes
 
 
 if __name__ == '__main__':
