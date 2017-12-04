@@ -56,65 +56,67 @@ def test_windowing():
     """Test boxes returned from `get_window_points()`. """
     print()
     #
-    # Full image test
+    # Far boxes
     #
-    print('Testing `get_window_points()` on a full image...')
-    img_size = (720, 1280, 3)
-    window_size = (128, 128)
-    overlap = 0.5
-    start_pos = (0, 0)
-    end_pos = (None, None)
-    bboxes_full = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    #assert len(bboxes_full) == 819, 'Incorrect number of windows, got {}, should be 819.'.format(
-    #        len(bboxes_full))
-
-    #
-    # Partial image test - a band covering the bottom third of the frame
-    #
-    print('Testing `get_window_points()` on a partial image...')
-    img_size = (720, 1280, 3)
+    print('Testing get_window_points() for far boxes...')
+    img_size = (720, 1216, 3)
     window_size = (64, 64)
     overlap = 0.5
-    start_pos = (0, 360)
-    end_pos = (1280, 490)
-    bboxes_partial = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    assert len(bboxes_partial) == 117, 'Incorrect number of windows, got {}, should be 117.'.format(
-            len(bboxes_partial))
-    #
-    # Partial image test - a band covering the bottom third of the frame, clipped at the left and right
-    #
-    print('Testing `get_window_points()` on a partial, clipped image...')
-    img_size = (720, 1280, 3)
-    window_size = (64, 64)
-    overlap = 0.5
-    start_pos = (256, 480)
-    end_pos = (1024, 576)
-    bboxes_clipped = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
+    start_pos = (200, 400)
+    end_pos = (1180, 464)
+    bboxes_far = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
+    assert len(bboxes_far) == 29, 'Incorrect number of windows, got {}, should be 29.'.format(
+            len(bboxes_far))
 
-    assert len(bboxes_clipped) == 46, 'Incorrect number of windows, got {}, should be 46.'.format(
-            len(bboxes_clipped))
+    #
+    # Middle boxes
+    #
+    print('Testing get_window_points() for middle boxes...')
+    img_size = (720, 1280, 3)
+    window_size = (306, 128)
+    overlap = 0.5
+    start_pos = (35, 428)
+    end_pos = (1280, 592)
+    bboxes_middle = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
+    #assert len(bboxes_middle) == 14, 'Incorrect number of windows, got {}, should be 14.'.format(
+    #        len(bboxes_middle))
+
+    #
+    # Near boxes
+    #
+    print('Testing get_window_points() for near boxes...')
+    img_size = (720, 1280, 3)
+    window_size = (306, 256)
+    overlap = 0.5
+    start_pos = (35, 364)
+    end_pos = (1280, 650)
+    bboxes_near = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
+    #assert len(bboxes_near) == 46, 'Incorrect number of windows, got {}, should be 46.'.format(
+    #        len(bboxes_near))
+    print(len(bboxes_near))
 
     # Visualize the results
     vis = True
     if vis:
-        fname = './test_images/bbox-example-image.jpg'
+        #fname = './test_images/bbox-example-image.jpg'
+        fname = './test_frames/frame_031.png'
         get_clr = lambda: np.random.randint(255, size=3).tolist()
 
         plt.close()
         f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(25, 10))
 
         canvas1 = imread(fname)
-        for box in bboxes_full:
+        for box in bboxes_far:
             cv2.rectangle(canvas1, box[0], box[1], get_clr(), 3)
         imshow(canvas1, axis=ax1)
 
         canvas2 = imread(fname)
-        for box in bboxes_partial:
+        for box in bboxes_middle:
             cv2.rectangle(canvas2, box[0], box[1], get_clr(), 3)
         imshow(canvas2, axis=ax2)
 
         canvas3 = imread(fname)
-        for box in bboxes_clipped:
+        for box in bboxes_near:
             cv2.rectangle(canvas3, box[0], box[1], get_clr(), 3)
         imshow(canvas3, axis=ax3)
 
@@ -138,13 +140,47 @@ def test_sliding_window_predictions(fname=None):
     else:
         img = imread(fname)
         print('Loaded {} with shape {}'.format(fname, img.shape))
-    window_size = (128, 128)
+
+
+    #
+    # Run far bounding boxes
+    #
+    window_size = (64, 64)
+    overlap = 0.25
+    start_pos = (200, 400)
+    end_pos = (1180, 464)
+    bboxes_far = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes_far:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+    #
+    # Run middle bounding boxes
+    #
+    window_size = (306, 100)
+    overlap = 0.25
+    start_pos = (35, 390)
+    end_pos = (1280, 592)
+    bboxes_mid = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes_mid:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+    #
+    # Run near bounding boxes
+    #
+    window_size = (275, 225)
     overlap = 0.5
-    #start_pos = (256, 510)
-    start_pos = (256, 382)
-    end_pos = (1024, 576)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-    car_boxes = []
+    start_pos = (35, 364)
+    end_pos = (1280, 650)
+    bboxes_near = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes_near:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
 
     # If True, show realtime visualizations
     vis = True    
@@ -162,7 +198,8 @@ def test_sliding_window_predictions(fname=None):
     get_clr = lambda: np.random.randint(255, size=3).tolist()
 
     cnt = 0
-    for box in bboxes:
+    car_boxes = []
+    for box in bboxes_far + bboxes_mid + bboxes_near:
         top_left, bottom_right = box
         sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
 
@@ -213,12 +250,40 @@ def test_sliding_window_predictions(fname=None):
     print('Prcessing one image took {:.3}s in CPU time.'.format(duration))
 
         
+def plot_example_features():
+    """"Plot an example of raw and scaled features"""
+    enable=False
+
+    num_plots = 5
+    if enable:
+        for i in range(num_plots):
+            fname, image, idx = load_data(car_or_not='car', random=True)[0]
+
+            fig = plt.figure(figsize=(12,4))
+
+            plt.subplot(131)
+            imshow(image)
+            plt.title('Original Image')
+
+            plt.subplot(132)
+            plt.plot(X[idx])
+            plt.title('Raw Features')
+
+            plt.subplot(133)
+            plt.plot(X_scaled[idx])
+            plt.title('Scaled features')
+
+            fig.tight_layout()
+            plt.show()
+
+
 def main():
     global args, scaler_fname
 
     args = parse_args()
     scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
 
+    plot_example_features()
     test_predictions()
     test_windowing()
     test_sliding_window_predictions()

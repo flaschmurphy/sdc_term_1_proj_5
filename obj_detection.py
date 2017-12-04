@@ -15,6 +15,7 @@ import pickle
 import numpy as np
 from argparse import ArgumentParser
 from collections import defaultdict
+from moviepy.editor import VideoFileClip
 
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -32,31 +33,10 @@ from mpl_toolkits.mplot3d import Axes3D
 
 CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
 #CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
+NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')
+#NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
-#NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
-#NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar/*.png')
-
-
-def parse_args():
-    parser = ArgumentParser()
-    model_group = parser.add_mutually_exclusive_group(required=True)
-    model_group.add_argument('-t', '--train', dest='train_size',
-            help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
-            use for training on. Specify '-1' to train on all available data. If not including 
-            training, must specify a model to load from disk (a previously pickled one) 
-            using the `-m` switch. The number of car samples loaded for training will be porportional
-            to the number of notcar samples specified here.""")
-    model_group.add_argument('-m', '--model', dest='model_file', 
-            help="""Where to find a previously pickled model file to use instead of training""")
-    parser.add_argument('-s', '--save', dest='save_file', 
-            help="""Where to save the SVM model back to disk (if training)""")
-
-    args = parser.parse_args()
-
-    if args.train_size is not None and args.save_file is None:
-        print('!!! WARNING !!! Trained model will not be stored to disk!')
-
-    return args
+NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
 
 #######################################################################################################
@@ -64,6 +44,45 @@ def parse_args():
 # Helper functions
 #
 #######################################################################################################
+
+def parse_args():
+    parser = ArgumentParser()
+
+    ex_group = parser.add_mutually_exclusive_group(required=True)
+    ex_group.add_argument('-t', '--train', dest='train_size',
+            help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
+            use for training on. Specify '-1' to train on all available data. If not including 
+            training, must specify a model to load from disk (a previously pickled one) 
+            using the `-m` switch. The number of car samples loaded for training will be porportional
+            to the number of notcar samples specified here.""")
+    ex_group.add_argument('-v', '--videoin', dest='input_video',
+            help="""The input video file""")
+
+    parser.add_argument('-s', '--save', dest='save_file', 
+            help="""Where to save the SVM model back to disk (if training)""")
+
+    parser.add_argument('-o', '--videoout', dest='output_video',
+            help="""The video output file""")
+ 
+    parser.add_argument('-c', '--classifier', dest='clf_fname', 
+            help="""Where to find a previously pickled SVM file to use if not training""")
+
+    parser.add_argument('-d', '--stdscaler', dest='scaler_fname',
+            help="""Where to find a previously pickled StandadrScaler for the SVM""")
+
+    args = parser.parse_args()
+
+    if args.scaler_fname is None:
+        if args.clf_fname is not None:
+            args.scaler_fname = ''.join(args.clf_fname.split('.')[:-1]) + '_scaler.pkl'
+        else:
+            args.scaler_fname = ''.join(args.save_file.split('.')[:-1]) + '_scaler.pkl'
+ 
+    if args.train_size is not None and args.save_file is None:
+        print('!!! WARNING !!! Trained model will not be stored to disk!')
+
+    return args
+
 
 def imread(fname, for_prediction=False):
     """Helper function to always load images in a consistent way. Note that since we're using cv2
@@ -253,8 +272,7 @@ def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
     return features
 
 
-def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, 
-        hist_range=(0, 256), vis=False):
+def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256), vis=False):
     """Extract features to generate a feature vector.
 
     Args:
@@ -273,7 +291,7 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32,
     """
     assert cspace in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
 
-    print('Extracting features...')
+    #print('Extracting features...')
     features = []
 
     ctr = 0
@@ -347,14 +365,95 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32,
 
     assert len(features) > 0, 'Got no features'
 
-    print('Extracted features were length {:,}'.format(len(features[0])))
+    #print('Extracted features were length {:,}'.format(len(features[0])))
 
     return features
 
 
+def video_pipeline(img):
+    """Callback for moviepy video processing.
+
+    Args:
+        img: the input image, coming from moviepy will be in RGB
+
+    Returns:
+        a new image with boxes drawn where cars are predicted
+
+    """
+    if 'cnt' not in video_pipeline.__dict__:
+        video_pipeline.cnt = 0
+    video_pipeline.cnt += 1
+
+    fname = 'video_frame_{:04}.png'.format(video_pipeline.cnt) # a dummy file name needed by pipeline()
+
+    img = img.copy()[:,:,::-1] # converts from RGB to BGR
+    car_boxes = []
+
+    # Lambda to generate a random color
+    get_clr = lambda: np.random.randint(255, size=3).tolist()
+
+    #
+    # Run far bounding boxes
+    #
+    window_size = (64, 64)
+    overlap = 0.25
+    start_pos = (200, 400)
+    end_pos = (1180, 464)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+        prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
+        if prediction == 1:
+            car_boxes.append(box)
+    
+    #
+    # Run middle bounding boxes
+    #
+    window_size = (306, 100)
+    overlap = 0.25
+    start_pos = (35, 390)
+    end_pos = (1280, 592)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+        prediction = predict(sub_img, CLF, args.scaler_fname, fname='mid_' + fname, vis=False, verbose=True)
+        if prediction == 1:
+            car_boxes.append(box)
+     
+    #
+    # Run near bounding boxes
+    #
+    window_size = (275, 225)
+    overlap = 0.5
+    start_pos = (35, 364)
+    end_pos = (1280, 650)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+
+    for box in bboxes:
+        top_left, bottom_right = box
+        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+        prediction = predict(sub_img, CLF, args.scaler_fname, fname='near_' + fname, vis=False, verbose=True)
+        if prediction == 1:
+            car_boxes.append(box)
+
+    # Some annoying bug in cv2 that needs tbis copy workaround,,, :( :(
+    img_ = img.copy()
+    for box in car_boxes:
+        cv2.rectangle(img_, box[0], box[1], get_clr(), 3)
+
+    return img_[:,:,::-1]
+
+
 #######################################################################################################
 #
-# Data functions
+# Data model functions
 #
 #######################################################################################################
 
@@ -569,7 +668,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     assert X.shape[0] == y.shape[0], 'Features and labels must be the same length'
 
     # Set the amount of data to use for training the classifier.
-    if subset_size is None:
+    if subset_size is None or subset_size < 0:
         subset_size = len(y)
     idx = np.random.permutation(X.shape[0])[:subset_size]
     X_subset = X[idx]
@@ -581,13 +680,16 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     print('Fitting data...')
 
     # Parameters for GridSearchCV
+    grid_search = False
     parameters = [
-            {'kernel': ['linear'], 'C': [1]},
-            #{'kernel': ['linear'], 'C': [0.01, 1, 10]},
-            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
+            #{'kernel': ['linear'], 'C': [1]},
+            {'kernel': ['linear'], 'C': [0.001, 0.01, 1, 10]},
+            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [0.001, 0.001, 1, 10, 100]},
         ]
-    #clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
-    clf = SVC(kernel='linear', C=0.01, probability=True) 
+    if grid_search:
+        clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
+    else:
+        clf = SVC(kernel='linear', C=1, probability=True) 
 
     clf.fit(X_train, y_train)
     print(clf)
@@ -618,9 +720,8 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
         The prediction is 1 if the prediction is 'car' or 0 if the prediction is 'not car'
         
     """
-    img = img.copy()
-    img.resize((64, 64, 3))
-    features = pipeline([[fname, img, 0]], vis=vis)
+    img_new = cv2.resize(img, (64, 64))
+    features = pipeline([[fname, img_new, 0]], vis=vis)
 
     scaler = pickle.load(open(scaler_pkl, 'rb'))
     features = scaler.transform(features)
@@ -643,7 +744,7 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
                 grade = 'INCORRECT'
 
         print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: ({}, {}) | size: ({}, {}))'.format(
-            fname, prediction, prediction_txt, grade, probs[0], probs[1], img.shape[0], img.shape[1]))
+            fname, prediction, prediction_txt, grade, probs[0], probs[1], img_new.shape[0], img_new.shape[1]))
 
     return prediction
 
@@ -654,74 +755,36 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
 #
 #######################################################################################################
 
-def main(train=False, save_file=None, subset_size=-1, model_file=None):
+def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None):
     """Main entry point.
-
-    Reminders from lessons and notes:
-
-    * In the HOG function, you could also include a keyword to set the tranform_sqrt flag but
-      for this exercise you can just leave this at the default value of
-      transform_sqrt=False
-
-    * Don't forget to normalize any concatenated features in the pipeline (they should 
-      all be in the same range, e.g. between 0 and 1). Use sklearn.StandardScalar()
-
-    * Either use cv2.imread (meaning BGR) or mpimg.imread (meaning RGB) but don't mix them
 
     * Feature extraction: 
        - Raw pixel intensity:              color and shape
        - Histogram of pixel intensity:     color only
        - Gradients of pixel intensity:     shape only
 
-
     Args:
         train: if True, run training
         save_file: if not None and training, save the model to this location after training
         subset_size: limits the amount of data used for training, default is all data
         model_file; where to save the trained model to
-
+        args: all command line args
 
     """
-
-    ###############################################################
-    #
-    # Plot an example of raw and scaled features
-    #
-    ###############################################################
-    enable=False
-
-    num_plots = 5
-    if enable:
-        for i in range(num_plots):
-            fname, image, idx = load_data(car_or_not='car', random=True)[0]
-
-            fig = plt.figure(figsize=(12,4))
-
-            plt.subplot(131)
-            imshow(image)
-            plt.title('Original Image')
-
-            plt.subplot(132)
-            plt.plot(X[idx])
-            plt.title('Raw Features')
-
-            plt.subplot(133)
-            plt.plot(X_scaled[idx])
-            plt.title('Scaled features')
-
-            fig.tight_layout()
-            plt.show()
-    #
-    #
-    ###############################################################
-
-    # Load a classifier
+    global CLF
     if train is False:
-        clf = get_svm_model(model_file=model_file)
+        CLF = get_svm_model(model_file=model_file)
+        if args.input_video is not None:
+            assert args.output_video is not None, 'Must specify an output video.'
+            assert model_file is not None, 'Must provide an SVM model.'
+            vin = VideoFileClip(args.input_video)
+            vout = vin.fl_image(video_pipeline)
+            vout.write_videofile(args.output_video, audio=False)
+
     else:
         if save_file is not None and os.path.exists(save_file): 
-            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
-                save_file))
+            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format( save_file))
+
         X, y =  get_xy(clf_fname=save_file, length=subset_size)
         clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
 
@@ -825,6 +888,8 @@ if __name__ == '__main__':
     else:
         train = True
         trainsize = int(args.train_size)
-    clf = main(train=train, subset_size=trainsize, save_file=args.save_file, model_file=args.model_file)
+
+    main(train=train, subset_size=trainsize, save_file=args.save_file, 
+            model_file=args.clf_fname, args=args)
 
 
