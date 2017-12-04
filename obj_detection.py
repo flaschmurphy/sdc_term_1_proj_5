@@ -29,9 +29,11 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
-NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
-NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar/*.png')
+CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
+#CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
+NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
+#NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
+#NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar/*.png')
 
 
 def parse_args():
@@ -51,7 +53,7 @@ def parse_args():
     args = parser.parse_args()
 
     if args.train_size is not None and args.save_file is None:
-        print('WARNING!!! Trained model will not be stored to disk!')
+        print('!!! WARNING !!! Trained model will not be stored to disk!')
 
     return args
 
@@ -250,7 +252,7 @@ def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
     return features
 
 
-def pipeline(img_data, cspace='YUV', spatial_size=(32, 32), hist_bins=32, 
+def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, 
         hist_range=(0, 256), vis=False):
     """Extract features to generate a feature vector.
 
@@ -274,7 +276,6 @@ def pipeline(img_data, cspace='YUV', spatial_size=(32, 32), hist_bins=32,
     features = []
 
     ctr = 0
-    scaler = StandardScaler()
     for fname, img, idx in img_data:
         assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
@@ -480,10 +481,12 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
     return ret
 
 
-def get_xy(length=-1):
+def get_xy(clf_fname=None, length=-1):
     """Load image data and extract features and labels for training
 
     Args:
+        clf_fname: the file name where the classifier will be stored. This is used to generate
+            a filename for the StandardScaler object to also be stored.
         length: the amount of data to load per car or notcar, meaning a value of 2500 will
             try to load 2500 car or notcar images depending on the value of car_or_not
 
@@ -510,6 +513,11 @@ def get_xy(length=-1):
     scaler = StandardScaler()
     X = scaler.fit_transform(X_not_scaled)
 
+    # Very important that the StandardScaler that's made here is reused for all future predictions
+    if clf_fname is not None:
+        scaler_fname = ''.join(clf_fname.split('.')[:-1]) + '_scaler.pkl'
+        pickle.dump(scaler, open(scaler_fname, 'wb'))
+
     # Generate the labels
     car_labels = np.ones(len(car_features))
     notcar_labels = np.zeros(len(notcar_features))
@@ -517,6 +525,7 @@ def get_xy(length=-1):
 
     print('Loaded, extracted features, scaled and labeled {:,} images, {:,} cars and {:,} not cars'.format(
         len(y), len(car_data), len(notcar_data)))
+    print('StandardScaler was pickled to {}'.format(scaler_fname))
 
     return X, y
 
@@ -566,13 +575,13 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
 
     # Parameters for GridSearchCV
     parameters = [
-            {'kernel': ['linear'], 'C': [1]},
-            #{'kernel': ['linear'], 'C': [0.001, 0.01, 1, 10]},
+            #{'kernel': ['linear'], 'C': [1]},
+            {'kernel': ['linear'], 'C': [0.01, 1, 10]},
             #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
         ]
-    #clf = GridSearchCV(SVC(probability=True), parameters, cv=5, verbose=9)
+    clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
+    #clf = SVC(kernel='linear', C=0.01, probability=True) 
 
-    clf = SVC(kernel='linear', C=0.01, probability=True) 
     clf.fit(X_train, y_train)
     print(clf)
 
@@ -585,12 +594,14 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     return clf
 
 
-def predict(img, clf, fname='unknown', car=None, vis=False, verbose=False):
+def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=False):
     """Extract features and run the classifier on an image.
     
     Args:
         img: the image to predict against
         clf: the classifier
+        scaler_pkl: the pickled scaler for this model (must be reused from when the data
+            was originally fit)
         fname: the filename of the original file containing the image
         car: if known (while testing), whether or not this is a car image
         vis: if True, display a visualization of the pipeline
@@ -604,8 +615,8 @@ def predict(img, clf, fname='unknown', car=None, vis=False, verbose=False):
     img.resize((64, 64, 3))
     features = pipeline([[fname, img, 0]], vis=vis)
 
-    scaler = StandardScaler()
-    features = scaler.fit_transform(features)
+    scaler = pickle.load(open(scaler_pkl, 'rb'))
+    features = scaler.transform(features)
 
     prediction = clf.predict(features)[0]
     probs = clf.predict_proba(features)[0]
@@ -702,9 +713,9 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None):
         clf = get_svm_model(model_file=model_file)
     else:
         if save_file is not None and os.path.exists(save_file): 
-            print('!!!WARNING!!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
+            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
                 save_file))
-        X, y =  get_xy(length=subset_size)
+        X, y =  get_xy(clf_fname=save_file, length=subset_size)
         clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
 
         if save_file is not None:

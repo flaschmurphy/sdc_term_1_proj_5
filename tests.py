@@ -40,11 +40,11 @@ def test_predictions():
 
     for fname in car_fnames:
         img = imread(fname)
-        predict(img, clf, fname=fname, car=True, vis=True)
+        predict(img, clf, scaler_fname, fname=fname, car=True, vis=True)
 
     for fname in notcar_fnames:
         img = imread(fname)
-        predict(img, clf, fname=fname, car=False, vis=True)
+        predict(img, clf, scaler_fname, fname=fname, car=False, vis=True)
 
     plt.pause(2)
     plt.close()
@@ -166,7 +166,8 @@ def test_sliding_window_predictions(fname=None):
         top_left, bottom_right = box
         sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
 
-        prediction = predict(sub_img, clf, fname='./test_images/bbox-example-image.jpg', vis=False, verbose=True)
+        prediction = predict(sub_img, clf, scaler_fname, 
+                fname='./test_images/bbox-example-image.jpg', vis=False, verbose=True)
 
         # Store any box that the classifier things contains a car
         if prediction == 1:
@@ -213,11 +214,13 @@ def test_sliding_window_predictions(fname=None):
 
         
 def main():
-    global args
-    args = parse_args()
+    global args, scaler_fname
 
-    #test_predictions()
-    #test_windowing()
+    args = parse_args()
+    scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
+
+    test_predictions()
+    test_windowing()
     test_sliding_window_predictions()
     for fname in glob.glob('./test_frames/*'):
         test_sliding_window_predictions(fname)
