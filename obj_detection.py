@@ -23,6 +23,8 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
+from scipy.ndimage.measurements import label
+
 from skimage.feature import hog
 
 import matplotlib.pyplot as plt
@@ -300,6 +302,9 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
 
         img_orig = img.copy()
 
+        # Hack to change that white car that's causing problems into a black car
+        img_orig[np.sum(img_orig, axis=2) > 600] = 0
+
         if cspace == 'BGR':
             img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB)
         elif cspace == 'HSV':
@@ -336,7 +341,7 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
             fig.set_size_inches(24, 5, forward=True)
 
             plt.subplot(151)
-            imshow(img)
+            imshow(imread(fname))
             plt.title('Original Image')
 
             plt.subplot(152)
@@ -398,7 +403,7 @@ def video_pipeline(img):
     window_size = (64, 64)
     overlap = 0.25
     start_pos = (200, 400)
-    end_pos = (1180, 464)
+    end_pos = (img.shape[1], 464)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
     for box in bboxes:
@@ -412,10 +417,10 @@ def video_pipeline(img):
     #
     # Run middle bounding boxes
     #
-    window_size = (306, 100)
+    window_size = (250, 100)
     overlap = 0.25
-    start_pos = (35, 390)
-    end_pos = (1280, 592)
+    start_pos = (0, 380)
+    end_pos = (img.shape[1], 480)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
     for box in bboxes:
@@ -429,10 +434,10 @@ def video_pipeline(img):
     #
     # Run near bounding boxes
     #
-    window_size = (275, 225)
+    window_size = (200, 200)
     overlap = 0.5
-    start_pos = (35, 364)
-    end_pos = (1280, 650)
+    start_pos = (0, 335)
+    end_pos = (img.shape[1], 535)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
     for box in bboxes:
@@ -539,26 +544,26 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
         print('  Pixel value range: ({}, {})'.format(first_minval, first_maxval))
         print('  File type counts: {}'.format(str(dict(file_types))))
 
-    if vis:
-        # Choose random car / not-car indices and plot example images   
-        car_ind = np.random.randint(0, len(car_fnames))
-        notcar_ind = np.random.randint(0, len(notcar_fnames))
-            
-        # Read in car / not-car images
-        car_image = imread(car_fnames[car_ind])
-        car_image *= (255.0/car_image.max())    # normalize to (0, 255)
+    #if vis:
+    #    # Choose random car / not-car indices and plot example images   
+    #    car_ind = np.random.randint(0, len(car_fnames))
+    #    notcar_ind = np.random.randint(0, len(notcar_fnames))
+    #        
+    #    # Read in car / not-car images
+    #    car_image = imread(car_fnames[car_ind])
+    #    car_image *= (255.0/car_image.max())    # normalize to (0, 255)
 
-        notcar_image = imread(notcar_fnames[notcar_ind])
+    #    notcar_image = imread(notcar_fnames[notcar_ind])
 
-        # Plot the examples
-        fig = plt.figure()
-        plt.subplot(121)
-        imshow(car_image)()
-        plt.title('Example Car Image')
-        plt.subplot(122)
-        imshow(notcar_image)()
-        plt.title('Example Not-car Image')
-        plt.show()
+    #    # Plot the examples
+    #    fig = plt.figure()
+    #    plt.subplot(121)
+    #    imshow(car_image)()
+    #    plt.title('Example Car Image')
+    #    plt.subplot(122)
+    #    imshow(notcar_image)()
+    #    plt.title('Example Not-car Image')
+    #    plt.show()
 
     if car_or_not == 'car':
         if length < 0:
@@ -783,7 +788,8 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None
 
     else:
         if save_file is not None and os.path.exists(save_file): 
-            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format( save_file))
+            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
+                save_file))
 
         X, y =  get_xy(clf_fname=save_file, length=subset_size)
         clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
