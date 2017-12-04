@@ -14,6 +14,7 @@ import sys
 import pickle
 import numpy as np
 from argparse import ArgumentParser
+from collections import defaultdict
 
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -390,6 +391,7 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
         first_img = imread(car_fnames[0])
         image_shape = first_img.shape
         data_type = first_img.dtype
+        file_types = defaultdict(lambda: 0)
 
         def get_minmax(img):
             if img.min() <= 1 and img.min() >= 0: 
@@ -410,6 +412,10 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
         first_minval, first_maxval = get_minmax(first_img)
 
         for fname in car_fnames + notcar_fnames:
+
+             ext = fname.split('.')[-1]
+             file_types[ext] += 1
+
              cur_img = imread(fname)
              curmin, curmax = get_minmax(cur_img)
              if cur_img.shape != image_shape:
@@ -432,6 +438,7 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
         print('  Total number of images: {} cars and {} non-cars'.format(data["n_cars"], data["n_notcars"]))
         print('  Image size: {}, data type: {}'.format(data["image_shape"], data["data_type"]))
         print('  Pixel value range: ({}, {})'.format(first_minval, first_maxval))
+        print('  File type counts: {}'.format(str(dict(file_types))))
 
     if vis:
         # Choose random car / not-car indices and plot example images   
@@ -575,12 +582,12 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
 
     # Parameters for GridSearchCV
     parameters = [
-            #{'kernel': ['linear'], 'C': [1]},
-            {'kernel': ['linear'], 'C': [0.01, 1, 10]},
+            {'kernel': ['linear'], 'C': [1]},
+            #{'kernel': ['linear'], 'C': [0.01, 1, 10]},
             #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [1, 10, 100, 1000]},
         ]
-    clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
-    #clf = SVC(kernel='linear', C=0.01, probability=True) 
+    #clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
+    clf = SVC(kernel='linear', C=0.01, probability=True) 
 
     clf.fit(X_train, y_train)
     print(clf)
