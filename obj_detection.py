@@ -120,6 +120,49 @@ def imsave(fname, img):
     cv2.imwrite(fname, img)
 
 
+def draw_labeled_bboxes(img, labels):
+    """Borrowed from Udacity lesson. Take in a labels canvas and use it to overlay
+    bounding rectangles for detected objects.
+    
+    Args:
+        img: the image to modify
+        labels: at 2-tuple containing the box image and the number of objects
+
+    Returns:
+        a modified verion of the image with boxes added (changes in place)
+
+    """
+    for car_number in range(1, labels[1]+1):
+        # Find pixels with each car_number label value
+        nonzero = (labels[0] == car_number).nonzero()
+
+        # Identify x and y values of those pixels
+        nonzeroy = np.array(nonzero[0])
+        nonzerox = np.array(nonzero[1])
+
+        # Define a bounding box based on min/max x and y
+        bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+
+        # Draw the box on the image
+        cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 6)
+
+    #return img
+
+
+def video_extract(src_fname, tgt_fname, t1, t2):
+    """Extract a subset of a video and save it to disk. The ffmpeg_tools way is pretty fast.
+    
+    Args:
+        src_fname: source video
+        tgt_name: where to store the clip
+        t1: start time in seconds
+        t2: end time in seconds
+    
+    """
+    from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
+    ffmpeg_extract_subclip(src_fname, t1, t2, targetname=tgt_fname)
+
+
 #######################################################################################################
 #
 # Pipeline functions
@@ -302,8 +345,8 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
 
         img_orig = img.copy()
 
-        # Hack to change that white car that's causing problems into a black car
-        img_orig[np.sum(img_orig, axis=2) > 600] = 0
+        # Quick hack to change that white car that's causing problems into a black car
+        img_orig[np.sum(img_orig, axis=2) > 550] = 0
 
         if cspace == 'BGR':
             img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB)
@@ -385,6 +428,9 @@ def video_pipeline(img):
         a new image with boxes drawn where cars are predicted
 
     """
+    # Remove this line unless debugging (see same line in pipeline() method)
+    #img[np.sum(img, axis=2) > 550] = 0
+
     if 'cnt' not in video_pipeline.__dict__:
         video_pipeline.cnt = 0
     video_pipeline.cnt += 1
@@ -400,7 +446,7 @@ def video_pipeline(img):
     #
     # Run far bounding boxes
     #
-    window_size = (64, 64)
+    window_size = (32, 32)
     overlap = 0.25
     start_pos = (200, 400)
     end_pos = (img.shape[1], 464)
@@ -417,7 +463,7 @@ def video_pipeline(img):
     #
     # Run middle bounding boxes
     #
-    window_size = (250, 100)
+    window_size = (64, 64)
     overlap = 0.25
     start_pos = (0, 380)
     end_pos = (img.shape[1], 480)
@@ -434,7 +480,7 @@ def video_pipeline(img):
     #
     # Run near bounding boxes
     #
-    window_size = (200, 200)
+    window_size = (128, 128)
     overlap = 0.5
     start_pos = (0, 335)
     end_pos = (img.shape[1], 535)
@@ -448,10 +494,18 @@ def video_pipeline(img):
         if prediction == 1:
             car_boxes.append(box)
 
-    # Some annoying bug in cv2 that needs tbis copy workaround,,, :( :(
+    # Some annoying bug in cv2 that needs tbis copy workaround :( :(
     img_ = img.copy()
+
+    threshold = 60
+    heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
     for box in car_boxes:
-        cv2.rectangle(img_, box[0], box[1], get_clr(), 3)
+        cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
+        heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
+
+    heatmap[heatmap <= threshold] = 0
+    labels = label(heatmap)
+    draw_labeled_bboxes(img_, labels)
 
     return img_[:,:,::-1]
 
@@ -751,7 +805,7 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
         print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: ({}, {}) | size: ({}, {}))'.format(
             fname, prediction, prediction_txt, grade, probs[0], probs[1], img_new.shape[0], img_new.shape[1]))
 
-    return prediction
+    return int(prediction)
 
 
 #######################################################################################################
