@@ -428,7 +428,7 @@ Model was saved to model_lc1_full_withkitti_mine.pkl
 
 My final video can be seen here:
 
-* YouTube
+* [YouTube](https://youtu.be/AvhRnC85p20)
 * [Local File](./project_video.mp4)
 
 Unfortunately the detection was far from perfect despite all my efforts. There
