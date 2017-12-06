@@ -109,17 +109,17 @@ def test_windowing():
 
         canvas1 = imread(fname)
         for box in bboxes_far:
-            cv2.rectangle(canvas1, box[0], box[1], get_clr(), 1)
+            cv2.rectangle(canvas1, box[0], box[1], get_clr(), 2)
         imshow(canvas1, axis=ax1)
 
         canvas2 = imread(fname)
         for box in bboxes_middle:
-            cv2.rectangle(canvas2, box[0], box[1], get_clr(), 1)
+            cv2.rectangle(canvas2, box[0], box[1], get_clr(), 2)
         imshow(canvas2, axis=ax2)
 
         canvas3 = imread(fname)
         for box in bboxes_near:
-            cv2.rectangle(canvas3, box[0], box[1], get_clr(), 1)
+            cv2.rectangle(canvas3, box[0], box[1], get_clr(), 2)
         imshow(canvas3, axis=ax3)
 
         plt.tight_layout()
@@ -146,7 +146,7 @@ def test_sliding_window_predictions(fname=None, vis=True):
     #
     # Run far bounding boxes
     #
-    window_size = (64, 64)
+    window_size = (32, 32)
     overlap = 0.25
     start_pos = (200, 400)
     end_pos = (img.shape[1], 464)
@@ -155,7 +155,7 @@ def test_sliding_window_predictions(fname=None, vis=True):
     #
     # Run middle bounding boxes
     #
-    window_size = (250, 100)
+    window_size = (64, 64)
     overlap = 0.25
     start_pos = (0, 380)
     end_pos = (img.shape[1], 480)
@@ -164,7 +164,7 @@ def test_sliding_window_predictions(fname=None, vis=True):
     #
     # Run near bounding boxes
     #
-    window_size = (200, 200)
+    window_size = (128, 128)
     overlap = 0.5
     start_pos = (0, 335)
     end_pos = (img.shape[1], 535)
@@ -268,11 +268,11 @@ def main():
     args = parse_args()
     scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
 
-    #test_predictions()
+    test_predictions()
  
-    #test_windowing()
+    test_windowing()
 
-    #test_sliding_window_predictions()
+    test_sliding_window_predictions()
 
     for fname in glob.glob('./test_frames/*'):
         car_boxes = test_sliding_window_predictions(fname)

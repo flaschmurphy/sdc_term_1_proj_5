@@ -4,3 +4,4 @@ training_images
 *.swo
 __pycache__
 project_video.mp4
+*_[0-9].mp4

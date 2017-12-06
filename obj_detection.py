@@ -12,6 +12,7 @@ import glob
 import cv2
 import sys
 import pickle
+import tempfile
 import numpy as np
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -54,11 +55,18 @@ def parse_args():
     ex_group.add_argument('-t', '--train', dest='train_size',
             help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
             use for training on. Specify '-1' to train on all available data. If not including 
-            training, must specify a model to load from disk (a previously pickled one) 
-            using the `-m` switch. The number of car samples loaded for training will be porportional
+            training, must specify a classifier to load from disk (a previously pickled one) 
+            using the `-c` switch. The number of car samples loaded for training will be porportional
             to the number of notcar samples specified here.""")
+
     ex_group.add_argument('-v', '--videoin', dest='input_video',
             help="""The input video file""")
+
+    parser.add_argument('-0', '--t0', dest='video_start',
+            help="""T0 -- time in seconds to start the video from""")
+
+    parser.add_argument('-1', '--t1', dest='video_end',
+            help="""T1 -- time in seconds to end the video at""")
 
     parser.add_argument('-s', '--save', dest='save_file', 
             help="""Where to save the SVM model back to disk (if training)""")
@@ -74,11 +82,13 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.scaler_fname is None:
-        if args.clf_fname is not None:
+    if args.train_size is None:
+        if args.clf_fname is None:
+            parser.print_usage()
+            sys.exit()
+
+        if args.scaler_fname is None:
             args.scaler_fname = ''.join(args.clf_fname.split('.')[:-1]) + '_scaler.pkl'
-        else:
-            args.scaler_fname = ''.join(args.save_file.split('.')[:-1]) + '_scaler.pkl'
  
     if args.train_size is not None and args.save_file is None:
         print('!!! WARNING !!! Trained model will not be stored to disk!')
@@ -146,21 +156,23 @@ def draw_labeled_bboxes(img, labels):
         # Draw the box on the image
         cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 6)
 
-    #return img
 
-
-def video_extract(src_fname, tgt_fname, t1, t2):
+def video_extract(src_fname, t1, t2, tgt_fname=None):
     """Extract a subset of a video and save it to disk. The ffmpeg_tools way is pretty fast.
     
     Args:
         src_fname: source video
-        tgt_name: where to store the clip
         t1: start time in seconds
         t2: end time in seconds
+        tgt_fname: where to store the clip. If None a temp file will be created and it's path returned
     
     """
+    if tgt_fname is None:
+        tgt_fname = tempfile.mkstemp(suffix='.mp4')[1]
     from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
     ffmpeg_extract_subclip(src_fname, t1, t2, targetname=tgt_fname)
+
+    return tgt_fname
 
 
 #######################################################################################################
@@ -405,7 +417,8 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
 
             fig.tight_layout()
             plt.show()
-            plt.pause(0.05)
+            #plt.pause(0.05)
+            plt.pause(2)
 
             plt.savefig('./resources/features_{}_{}'.format(idx, os.path.basename(fname)))
 
@@ -497,10 +510,11 @@ def video_pipeline(img):
     # Some annoying bug in cv2 that needs tbis copy workaround :( :(
     img_ = img.copy()
 
-    threshold = 60
+    threshold = 80
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
     for box in car_boxes:
-        cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
+        # Uncomment below to add a thin box for all detections (not just those bigger than the threshold)
+        #cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
         heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
 
     heatmap[heatmap <= threshold] = 0
@@ -836,7 +850,15 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None
         if args.input_video is not None:
             assert args.output_video is not None, 'Must specify an output video.'
             assert model_file is not None, 'Must provide an SVM model.'
-            vin = VideoFileClip(args.input_video)
+            
+            print('Processing video...')
+            if args.video_start is not None:
+                assert args.video_end is not None, 'Must specify an end time as well'
+                input_video = video_extract(args.input_video, int(args.video_start), int(args.video_end))
+            else:
+                input_video = args.input_video
+
+            vin = VideoFileClip(input_video)
             vout = vin.fl_image(video_pipeline)
             vout.write_videofile(args.output_video, audio=False)
 
