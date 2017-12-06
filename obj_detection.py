@@ -154,7 +154,7 @@ def draw_labeled_bboxes(img, labels):
         bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
 
         # Draw the box on the image
-        cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 6)
+        cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 2)
 
 
 def video_extract(src_fname, t1, t2, tgt_fname=None):
@@ -460,7 +460,7 @@ def video_pipeline(img):
     # Run far bounding boxes
     #
     window_size = (32, 32)
-    overlap = 0.25
+    overlap = 0.5
     start_pos = (200, 400)
     end_pos = (img.shape[1], 464)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)

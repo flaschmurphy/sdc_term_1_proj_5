@@ -10,14 +10,15 @@
 The goals / steps of this project are the following:
 
 * Perform a Histogram of Oriented Gradients (HOG) feature extraction on
-  a labeled training set of images and train a classifier Linear SVM classifier
+  a labeled training set of images and train a classifier (e.g. Linear SVM)
 * Optionally apply other feature extraction steps like color binning, color
   histograms, etc
-* Train a classifier such as Support Vector Machine to detect cars vs. not cars
+* Train a classifier such as Support Vector Machine to detect cars in images
+  & video
 * Implement a sliding-window algorithm to enable the classifier to
   search for vehicles in images
 * Run the pipeline on a video stream and create a heat map of recurring
-  detections frame by frame to reject outliers and follow detected vehicles
+  detections frame by frame. Reject outliers and follow detected vehicles
 * Estimate a bounding box for vehicles detected
 
 The implementation script is in the main workspace of the git repo and is called
@@ -294,8 +295,7 @@ For box dimension and overlap size, I chose three different sizes and ran each
 of the 3 sliding windows over each image. This was my attempt to capture cars
 that are small (i.e far away) in the image, not so small and large (i.e.
 close). Although this approach was somewhat successful, I think if I had more
-time I could probably come up with a more optimal set of sliding windows, but
-these choices were adequate for demonstration purposes.
+time I could probably come up with a more optimal set of sliding windows.
 
 Below is the configuration code for the sliding windows which is contained in
 the `video_pipeline()` method in the script file:
@@ -305,7 +305,7 @@ the `video_pipeline()` method in the script file:
     # Run far bounding boxes
     #
     window_size = (32, 32)
-    overlap = 0.25
+    overlap = 0.5
     start_pos = (200, 400)
     end_pos = (img.shape[1], 464)
 
@@ -363,7 +363,7 @@ in the video. I didn't have time to fully debug this, but a quick partial soluti
 with the following single line of code:
 
 ```python
-        # Quick hack to change that white car that's causing problems into a black car
+        # Change the white car that's causing problems into a black car
         img_orig[np.sum(img_orig, axis=2) > 550] = 0
 
 ```
@@ -505,13 +505,16 @@ a very good sense of the potential that Computer Vision combined with machine
 learning techniques like Support Vector Machines, Decision Trees and/or Deep
 Neural Networks could have. 
 
-The implementation does not do well with white cars it seems and would probably
-struggle to deal with a very busy environment with many cars all around. Being
-so sensitive to color is obviously a major weakness and therefore a better
-understanding of the available color spaces would be needed to take it further.
-If combining this with lane detection, traffic light detection and more, then
-multiple parallel pipelines would surely be required, each with it's own
-pre-processing, thresholds, classification model, etc.
+The implementation does not do well with white cars and would probably
+struggle to deal with a very busy environment with many cars all around. It
+obviously fails to detect the white car once it's a certain distance from the
+camera which is frustrating. Unfortunately I was not able to find time to
+further debug this. Being so sensitive to color is obviously a major weakness
+and therefore a better understanding of the available color spaces would be
+needed to take it further.  If combining this with lane detection, traffic
+light detection and more, then multiple parallel pipelines would surely be
+required, each with it's own pre-processing, thresholds, classification model,
+etc.
 
 One major problem that I faced was realizing that the StandardScaler object
 needs to be persisted and reused. It was not obvious to me in the documentation
