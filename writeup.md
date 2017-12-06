@@ -506,8 +506,8 @@ learning techniques like Support Vector Machines, Decision Trees and/or Deep
 Neural Networks could have. 
 
 The implementation does not do well with white cars and would probably
-struggle to deal with a very busy environment with many cars all around. It
-obviously fails to detect the white car once it's a certain distance from the
+struggle to deal with a very busy environment with many cars all around. It fails 
+to detect the white car once it's a certain distance from the
 camera which is frustrating. Unfortunately I was not able to find time to
 further debug this. Being so sensitive to color is obviously a major weakness
 and therefore a better understanding of the available color spaces would be
@@ -536,8 +536,8 @@ print out images along the pipeline and by spending time to understand the math
 behind the model, I'm sure a great deal of progress could be made with time. 
 
 One interesting aspect of this project and the last one is the efficiency of the
-pipeline processing. The final implementation in this repo takes in the order
-of 2 hours to process a 50s video. Obviously in a real car one would need to be
+pipeline processing. The final implementation in this repo takes many hours to 
+process a 50s video. Obviously in a real car one would need to be
 able to process video in real-time, meaning each frame would need to be fully
 processed and actuated in something like 1ms to 2ms. I wonder if this could be
 possible with Python (ignoring the safety issues with using Python in such
