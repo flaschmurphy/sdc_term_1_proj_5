@@ -17,6 +17,7 @@ import numpy as np
 from argparse import ArgumentParser
 from collections import defaultdict
 from moviepy.editor import VideoFileClip
+from collections import deque
 
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -34,7 +35,9 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('./training_images/vehicles/*/*.png')
+CAR_FNAMES = glob.glob('training_images/my_images/car/*.png')[:1000]
+CAR_FNAMES += glob.glob('training_images/my_images/car2/*.png')[:1000]
+CAR_FNAMES += glob.glob('./training_images/vehicles/*/*.png')
 #CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')
 #NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
@@ -54,7 +57,7 @@ def parse_args():
     ex_group = parser.add_mutually_exclusive_group(required=True)
     ex_group.add_argument('-t', '--train', dest='train_size',
             help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
-            use for training on. Specify '-1' to train on all available data. If not including 
+            use for training on. Specify 'all' to train on all available data. If not including 
             training, must specify a classifier to load from disk (a previously pickled one) 
             using the `-c` switch. The number of car samples loaded for training will be porportional
             to the number of notcar samples specified here.""")
@@ -80,6 +83,10 @@ def parse_args():
     parser.add_argument('-d', '--stdscaler', dest='scaler_fname',
             help="""Where to find a previously pickled StandadrScaler for the SVM""")
 
+    parser.add_argument('-g', '--debug', dest='debug', action='store_true',
+            help="""Debug mode - things like include all rectangles to output video and 
+            possibly print more logs.""")
+
     args = parser.parse_args()
 
     if args.train_size is None:
@@ -92,6 +99,9 @@ def parse_args():
  
     if args.train_size is not None and args.save_file is None:
         print('!!! WARNING !!! Trained model will not be stored to disk!')
+
+    if args.train_size == 'all':
+        args.train_size = -1
 
     return args
 
@@ -128,6 +138,39 @@ def imshow(*args, **kwargs):
 def imsave(fname, img):
     """Save an image to disk in a consistent way"""
     cv2.imwrite(fname, img)
+
+
+def color_xform(img, tcmap):
+    """Convert img from BGR to the target color space
+
+    Args:
+        img: input imge in BGR, range 0:255
+        tcmap: target color space (RGB, HSV, LUV, HLS, YUV, YCrCb)
+
+    Returns:
+        a new image in the target color space
+
+    """
+    assert tcmap in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], 'Invalid target color space'
+
+    img = img.copy()
+    if tcmap == 'BGR': 
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    elif tcmap == 'HSV':
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    elif tcmap == 'LUV':
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
+    elif tcmap == 'HLS':
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+    elif tcmap == 'YUV':
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+    elif tcmap == 'YCrCb':
+        img_new = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+    else: 
+        img_new = img
+    assert img_new.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
+
+    return img_new
 
 
 def draw_labeled_bboxes(img, labels):
@@ -224,12 +267,14 @@ def get_template_matches(img, template_fnames, method=cv2.TM_CCOEFF_NORMED):
     return bbox_list
 
 
-def get_colorhist(img, nbins=32, bins_range=(0, 256), vis=False):
+def get_colorhist(img, nbins=64, tcmap='HLS', bins_range=(0, 256), vis=False):
     """Generate a histogram of color channels (RGB).
 
     Args:
         img: the imput image
         nbins: the number of bins in the histogram
+        tcmap: target color map. the image will be converted to this color space 
+            before processing
         bins_range: the range for the bins
         vis: if True, output data for creating a visualization
 
@@ -243,7 +288,7 @@ def get_colorhist(img, nbins=32, bins_range=(0, 256), vis=False):
     """
     assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
-    img = img.copy()
+    img = color_xform(img, tcmap)
     ch1_hist = np.histogram(img[:,:,0], bins=nbins, range=bins_range)
     ch2_hist = np.histogram(img[:,:,1], bins=nbins, range=bins_range)
     ch3_hist = np.histogram(img[:,:,2], bins=nbins, range=bins_range)
@@ -260,25 +305,28 @@ def get_colorhist(img, nbins=32, bins_range=(0, 256), vis=False):
     return ch1_hist, ch2_hist, ch3_hist, hist_features, bin_centers
 
 
-def get_spatial(img, size=(32, 32)):
+def get_spatial(img, tcmap='LUV', size=(16, 16)):
     """Convert an image to the provided color space, rescale it and unroll it.
 
     Args:
         img: the input image (assumed to be in RGB color space)
+        tcmap: target color map. the image will be converted to this color space 
+            before processing
         size: target size to scale to
 
     Returns:
         one dimensional feature vector of the converted image
 
     """
-    img = img.copy()
+    img = color_xform(img, tcmap)
     assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
     features = cv2.resize(img, size).ravel()
     assert len(features) > 0, 'Got no spatial features for image'
+
     return features
 
 
-def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
+def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
     """Get a Histogram of Oriented Gradients for an image.
 
     "Note: you could also include a keyword to set the tranform_sqrt flag but
@@ -291,13 +339,15 @@ def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
         pix_per_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
         cells_per_block: a 2-tuple giving the number of cells per block
         channel: which of the 3 color channels to get the HOG for, or 'all'
+        tcmap: target color map. the image will be converted to this color space 
+            before processing
 
     Returns:
         (features, hog_image) were the features are rolled out as a 1-D vector
 
     """
     assert channel in [0, 1, 2, 'all'], "Invalid channel specified, must be one of [0, 1, 2 'all']"
-    img = img.copy()
+    img = color_xform(img, tcmap)
     if channel == 'all':
         all_features = []
         for i in (0, 1, 2):
@@ -329,13 +379,12 @@ def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
     return features
 
 
-def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256), vis=False):
+def pipeline(img_data, spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256), vis=False):
     """Extract features to generate a feature vector.
 
     Args:
         img_data: a list of 3-tuples containing (filename, RGB image, idx) where idx is the index of 
             where that image was found in the original training data
-        cspace: color space to use for generating the features
         spacial_size: input to be used for the `bin_spacial()` function
         hist_bins: number of bins for the `get_colorhist()` function
         hist_range: hist range to pass to the `get_colorhist()` function
@@ -346,34 +395,11 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
         single list of normalized features
 
     """
-    assert cspace in ['RGB', 'HSV', 'LUV', 'HLS', 'YUV', 'YCrCb'], "Invalid target color space."
-
     #print('Extracting features...')
     features = []
 
     ctr = 0
     for fname, img, idx in img_data:
-        assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
-
-        img_orig = img.copy()
-
-        # Quick hack to change that white car that's causing problems into a black car
-        img_orig[np.sum(img_orig, axis=2) > 550] = 0
-
-        if cspace == 'BGR':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB)
-        elif cspace == 'HSV':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HSV)
-        elif cspace == 'LUV':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2LUV)
-        elif cspace == 'HLS':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2HLS)
-        elif cspace == 'YUV':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2YUV)
-        elif cspace == 'YCrCb':
-            img = cv2.cvtColor(img_orig, cv2.COLOR_BGR2YCrCb)
-        else: 
-            img = img_orig
         assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
         spatial_features = get_spatial(img, size=spatial_size)
@@ -386,17 +412,17 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
                 hog_features,
            )).astype(np.float32))
 
-        plt.ion()
-        if vis is True and ctr % 100 == 0:
+        if vis is True:
             if not os.path.exists('./resources'):
                os.mkdir('./resources')
 
+            plt.ion()
             plt.clf()
             fig = plt.gcf()
             fig.set_size_inches(24, 5, forward=True)
 
             plt.subplot(151)
-            imshow(imread(fname))
+            imshow(img)
             plt.title('Original Image')
 
             plt.subplot(152)
@@ -413,7 +439,7 @@ def pipeline(img_data, cspace='YCrCb', spatial_size=(32, 32), hist_bins=32, hist
 
             plt.subplot(155)
             plt.plot(features[-1])
-            plt.title('Feature Extraction ({})'.format(cspace))
+            plt.title('Feature Extraction')
 
             fig.tight_layout()
             plt.show()
@@ -441,28 +467,38 @@ def video_pipeline(img):
         a new image with boxes drawn where cars are predicted
 
     """
-    # Remove this line unless debugging (see same line in pipeline() method)
-    #img[np.sum(img, axis=2) > 550] = 0
 
     if 'cnt' not in video_pipeline.__dict__:
         video_pipeline.cnt = 0
     video_pipeline.cnt += 1
+
+    # To improve processing times, only process every Nth frame when debugging.
+    n = 5
+    if args.debug and video_pipeline.cnt % n != 0:
+        return img
 
     fname = 'video_frame_{:04}.png'.format(video_pipeline.cnt) # a dummy file name needed by pipeline()
 
     img = img.copy()[:,:,::-1] # converts from RGB to BGR
     car_boxes = []
 
+    # Change the white car that's causing problems into a black car. Note that this needs to be done during 
+    # training as well to be effective.
+    #img[np.sum(img, axis=2) > 550] = 0
+
     # Lambda to generate a random color
     get_clr = lambda: np.random.randint(255, size=3).tolist()
+
+    # Create a history deque to track car detection boxes
+    history = deque(maxlen=1)
 
     #
     # Run far bounding boxes
     #
-    window_size = (32, 32)
-    overlap = 0.5
-    start_pos = (200, 400)
-    end_pos = (img.shape[1], 464)
+    window_size = (64, 64)
+    overlap = 0.25
+    start_pos = (700, 400)
+    end_pos = (img.shape[1], 465)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
     for box in bboxes:
@@ -471,15 +507,23 @@ def video_pipeline(img):
 
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
         if prediction == 1:
-            car_boxes.append(box)
+            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
+            hit = False
+            for past_box in history:
+                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
+                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]):
+                        hit = True
+            if hit or len(history) == 0:
+                history.append(box)
+                car_boxes.append(box)
     
     #
     # Run middle bounding boxes
     #
-    window_size = (64, 64)
+    window_size = (96, 96)
     overlap = 0.25
-    start_pos = (0, 380)
-    end_pos = (img.shape[1], 480)
+    start_pos = (700, 380)
+    end_pos = (img.shape[1], 477)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
     for box in bboxes:
@@ -488,14 +532,22 @@ def video_pipeline(img):
 
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='mid_' + fname, vis=False, verbose=True)
         if prediction == 1:
-            car_boxes.append(box)
+            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
+            hit = False
+            for past_box in history:
+                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
+                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
+                        hit = True
+            if hit or len(history) == 0:
+                history.append(box)
+                car_boxes.append(box)
      
     #
     # Run near bounding boxes
     #
     window_size = (128, 128)
-    overlap = 0.5
-    start_pos = (0, 335)
+    overlap = 0.25
+    start_pos = (700, 335)
     end_pos = (img.shape[1], 535)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
 
@@ -505,16 +557,25 @@ def video_pipeline(img):
 
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='near_' + fname, vis=False, verbose=True)
         if prediction == 1:
-            car_boxes.append(box)
+            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
+            hit = False
+            for past_box in history:
+                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
+                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
+                        hit = True
+            if hit or len(history) == 0:
+                history.append(box)
+                car_boxes.append(box)
 
-    # Some annoying bug in cv2 that needs tbis copy workaround :( :(
+    # Some annoying bug in cv2 that needs this copy workaround :( :(
     img_ = img.copy()
 
-    threshold = 80
+    threshold = 20
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
     for box in car_boxes:
-        # Uncomment below to add a thin box for all detections (not just those bigger than the threshold)
-        #cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
+        # Add a thin box for all detections (not just those bigger than the threshold) when debugging
+        if args.debug is True:
+            img_ = cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
         heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
 
     heatmap[heatmap <= threshold] = 0
@@ -585,18 +646,19 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
 
         for fname in car_fnames + notcar_fnames:
 
-             ext = fname.split('.')[-1]
-             file_types[ext] += 1
+            ext = fname.split('.')[-1]
+            file_types[ext] += 1
 
-             cur_img = imread(fname)
-             curmin, curmax = get_minmax(cur_img)
-             if cur_img.shape != image_shape:
-                raise Exception('Not all images have the same shape. {} was of size {}.'.format(fname, shape))
-             if cur_img.dtype != data_type:
-                raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, dtype))
-             if curmin != first_minval or curmax != first_maxval:
-                 raise Exception(
-                         """Not all images have the same dinemsions, got: ({}, {}) for {}, but expected ({}, {})"""\
+            cur_img = imread(fname)
+
+            curmin, curmax = get_minmax(cur_img)
+            if cur_img.shape != image_shape:
+               raise Exception('Not all images have the same shape. {} was of size {}.'.format(fname, shape))
+            if cur_img.dtype != data_type:
+               raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, dtype))
+            if curmin != first_minval or curmax != first_maxval:
+                raise Exception(
+                        """Not all images have the same dinemsions, got: ({}, {}) for {}, but expected ({}, {})"""\
                                  .format(curmin, curmax, fname, first_minval, first_maxval))
         print('  All images are consistent!')
  
@@ -611,27 +673,6 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
         print('  Image size: {}, data type: {}'.format(data["image_shape"], data["data_type"]))
         print('  Pixel value range: ({}, {})'.format(first_minval, first_maxval))
         print('  File type counts: {}'.format(str(dict(file_types))))
-
-    #if vis:
-    #    # Choose random car / not-car indices and plot example images   
-    #    car_ind = np.random.randint(0, len(car_fnames))
-    #    notcar_ind = np.random.randint(0, len(notcar_fnames))
-    #        
-    #    # Read in car / not-car images
-    #    car_image = imread(car_fnames[car_ind])
-    #    car_image *= (255.0/car_image.max())    # normalize to (0, 255)
-
-    #    notcar_image = imread(notcar_fnames[notcar_ind])
-
-    #    # Plot the examples
-    #    fig = plt.figure()
-    #    plt.subplot(121)
-    #    imshow(car_image)()
-    #    plt.title('Example Car Image')
-    #    plt.subplot(122)
-    #    imshow(notcar_image)()
-    #    plt.title('Example Not-car Image')
-    #    plt.show()
 
     if car_or_not == 'car':
         if length < 0:
@@ -650,11 +691,22 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
     if random is True:
         idx = np.random.randint(0, len(fnames))
         img = imread(fnames[idx])
+
+        # The classifier seems to have a problem with the white car in the 
+        # video so I'm changing it to a black car using the line below. 
+        #img[np.sum(img, axis=2) > 550] = 0
+
         ret.append([fnames[idx], img, idx])
     else:
         i = 0
         for f in fnames:
-            ret.append([f, imread(f), i])
+            img = imread(f)
+
+            # The classifier seems to have a problem with the white car in the 
+            # video so I'm changing it to a black car using the line below. 
+            img[np.sum(img, axis=2) > 550] = 0
+
+            ret.append([f, img, i])
             i += 1
 
     return ret
@@ -676,14 +728,12 @@ def get_xy(clf_fname=None, length=-1):
 
     print('Loading features and labels...')
 
-    cspace = 'YCrCb'
-
     car_data = load_data(length=length, car_or_not='car')
     notcar_data = load_data(length=length, car_or_not='notcar', sanity=False)
 
-    car_features = pipeline(car_data, cspace=cspace, spatial_size=(32, 32),
+    car_features = pipeline(car_data, spatial_size=(32, 32),
                                     hist_bins=32, hist_range=(0, 256))
-    notcar_features = pipeline(notcar_data, cspace=cspace, spatial_size=(32, 32),
+    notcar_features = pipeline(notcar_data, spatial_size=(32, 32),
                                     hist_bins=32, hist_range=(0, 256))
 
     # Create an array stack of feature vectors
@@ -763,6 +813,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
         clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
     else:
         clf = SVC(kernel='linear', C=1, probability=True) 
+        #clf = SVC(kernel='linear', C=0.1, probability=True) 
 
     clf.fit(X_train, y_train)
     print(clf)
@@ -794,7 +845,7 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
         
     """
     img_new = cv2.resize(img, (64, 64))
-    features = pipeline([[fname, img_new, 0]], vis=vis)
+    features = pipeline([[fname, img_new, 0]])
 
     scaler = pickle.load(open(scaler_pkl, 'rb'))
     features = scaler.transform(features)
@@ -816,8 +867,9 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
             if prediction == 1 and not car:
                 grade = 'INCORRECT'
 
-        print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: ({}, {}) | size: ({}, {}))'.format(
-            fname, prediction, prediction_txt, grade, probs[0], probs[1], img_new.shape[0], img_new.shape[1]))
+        if prediction == 1:
+            print('{:35}, predicts: {} = {:6} --> {:9}, probabilities: ({}, {})'.format(
+                fname, prediction, prediction_txt, grade, probs[0], probs[1]))
 
     return int(prediction)
 
@@ -864,7 +916,7 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None
 
     else:
         if save_file is not None and os.path.exists(save_file): 
-            print('!!! WARNING !!! Proceeding will cause previous model file [{}] to be overwritten !!'.format(
+            print('!!! WARNING !!! Previous model ({}) to be overwritten !!'.format(
                 save_file))
 
         X, y =  get_xy(clf_fname=save_file, length=subset_size)
