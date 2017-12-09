@@ -379,7 +379,7 @@ def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tc
     return features
 
 
-def pipeline(img_data, spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256), vis=False):
+def pipeline(img_data):
     """Extract features to generate a feature vector.
 
     Args:
@@ -395,64 +395,23 @@ def pipeline(img_data, spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256),
         single list of normalized features
 
     """
-    #print('Extracting features...')
     features = []
 
     ctr = 0
     for fname, img, idx in img_data:
         assert img.max() > 1, "Pixel value range is not (0, 255), it's {}".format((img.min(), img.max()))
 
-        spatial_features = get_spatial(img, size=spatial_size)
-        color_features = get_colorhist(img, nbins=hist_bins, bins_range=hist_range)
+        spatial_features = get_spatial(img)
+        color_features = get_colorhist(img)
         hog_features = get_hog(img)
-
         features.append(np.concatenate((
                 spatial_features, 
                 color_features, 
                 hog_features,
            )).astype(np.float32))
-
-        if vis is True:
-            if not os.path.exists('./resources'):
-               os.mkdir('./resources')
-
-            plt.ion()
-            plt.clf()
-            fig = plt.gcf()
-            fig.set_size_inches(24, 5, forward=True)
-
-            plt.subplot(151)
-            imshow(img)
-            plt.title('Original Image')
-
-            plt.subplot(152)
-            plt.plot(spatial_features)
-            plt.title('Spatial')
-
-            plt.subplot(153)
-            plt.plot(color_features)
-            plt.title('Color')
-
-            plt.subplot(154)
-            plt.plot(hog_features)
-            plt.title('HOG')
-
-            plt.subplot(155)
-            plt.plot(features[-1])
-            plt.title('Feature Extraction')
-
-            fig.tight_layout()
-            plt.show()
-            #plt.pause(0.05)
-            plt.pause(2)
-
-            plt.savefig('./resources/features_{}_{}'.format(idx, os.path.basename(fname)))
-
         ctr += 1
 
     assert len(features) > 0, 'Got no features'
-
-    #print('Extracted features were length {:,}'.format(len(features[0])))
 
     return features
 
@@ -490,7 +449,11 @@ def video_pipeline(img):
     get_clr = lambda: np.random.randint(255, size=3).tolist()
 
     # Create a history deque to track car detection boxes
-    history = deque(maxlen=1)
+    hist_size = 20
+    history = deque(maxlen=hist_size)
+
+    heat_size = 5
+    heat_history = deque(maxlen=heat_size)
 
     #
     # Run far bounding boxes
@@ -508,12 +471,12 @@ def video_pipeline(img):
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
         if prediction == 1:
             center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hit = False
+            hits = 0
             for past_box in history:
                 if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
                     and center[1] > past_box[0][1] and center[1] < past_box[1][1]):
-                        hit = True
-            if hit or len(history) == 0:
+                        hits += 1
+            if hits >= hist_size or len(history) != hist_size:
                 history.append(box)
                 car_boxes.append(box)
     
@@ -521,7 +484,7 @@ def video_pipeline(img):
     # Run middle bounding boxes
     #
     window_size = (96, 96)
-    overlap = 0.25
+    overlap = 0.5
     start_pos = (700, 380)
     end_pos = (img.shape[1], 477)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
@@ -533,12 +496,12 @@ def video_pipeline(img):
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='mid_' + fname, vis=False, verbose=True)
         if prediction == 1:
             center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hit = False
+            hits = 0
             for past_box in history:
                 if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
                     and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
-                        hit = True
-            if hit or len(history) == 0:
+                        hits += 1
+            if hits >= hist_size or len(history) != hist_size:
                 history.append(box)
                 car_boxes.append(box)
      
@@ -546,7 +509,7 @@ def video_pipeline(img):
     # Run near bounding boxes
     #
     window_size = (128, 128)
-    overlap = 0.25
+    overlap = 0.5
     start_pos = (700, 335)
     end_pos = (img.shape[1], 535)
     bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
@@ -558,19 +521,19 @@ def video_pipeline(img):
         prediction = predict(sub_img, CLF, args.scaler_fname, fname='near_' + fname, vis=False, verbose=True)
         if prediction == 1:
             center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hit = False
+            hits = 0
             for past_box in history:
                 if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
                     and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
-                        hit = True
-            if hit or len(history) == 0:
+                        hits += 1
+            if hits >= hist_size or len(history) != hist_size:
                 history.append(box)
                 car_boxes.append(box)
 
     # Some annoying bug in cv2 that needs this copy workaround :( :(
     img_ = img.copy()
 
-    threshold = 20
+    threshold = 180
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
     for box in car_boxes:
         # Add a thin box for all detections (not just those bigger than the threshold) when debugging
@@ -579,7 +542,10 @@ def video_pipeline(img):
         heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
 
     heatmap[heatmap <= threshold] = 0
-    labels = label(heatmap)
+
+    heat_history.append(heatmap)
+
+    labels = label(sum(heat_history))
     draw_labeled_bboxes(img_, labels)
 
     return img_[:,:,::-1]
@@ -731,10 +697,8 @@ def get_xy(clf_fname=None, length=-1):
     car_data = load_data(length=length, car_or_not='car')
     notcar_data = load_data(length=length, car_or_not='notcar', sanity=False)
 
-    car_features = pipeline(car_data, spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256))
-    notcar_features = pipeline(notcar_data, spatial_size=(32, 32),
-                                    hist_bins=32, hist_range=(0, 256))
+    car_features = pipeline(car_data)
+    notcar_features = pipeline(notcar_data)
 
     # Create an array stack of feature vectors
     X_not_scaled = np.vstack((car_features, notcar_features)).astype(np.float32)

@@ -28,19 +28,19 @@ The implementation script is in the main workspace of the git repo and is called
 (carnd-term1) ciaran@ciaran-XPS-13-9360:sdc_term_1_proj_5$ python ./obj_detection.py -h
 usage: obj_detection.py [-h] (-t TRAIN_SIZE | -v INPUT_VIDEO) [-0 VIDEO_START]
                         [-1 VIDEO_END] [-s SAVE_FILE] [-o OUTPUT_VIDEO]
-                        [-c CLF_FNAME] [-d SCALER_FNAME]
+                        [-c CLF_FNAME] [-d SCALER_FNAME] [-g]
 
 optional arguments:
   -h, --help            show this help message and exit
   -t TRAIN_SIZE, --train TRAIN_SIZE
                         Include the training step and use TRAIN value as the
                         number of _notcar_ samples to use for training on.
-                        Specify '-1' to train on all available data. If not
-                        including training, must specify a classifier to load from
-                        disk (a previously pickled one) using the `-c` switch.
-                        The number of car samples loaded for training will be
-                        porportional to the number of notcar samples specified
-                        here.
+                        Specify 'all' to train on all available data. If not
+                        including training, must specify a classifier to load
+                        from disk (a previously pickled one) using the `-c`
+                        switch. The number of car samples loaded for training
+                        will be porportional to the number of notcar samples
+                        specified here.
   -v INPUT_VIDEO, --videoin INPUT_VIDEO
                         The input video file
   -0 VIDEO_START, --t0 VIDEO_START
@@ -57,7 +57,10 @@ optional arguments:
   -d SCALER_FNAME, --stdscaler SCALER_FNAME
                         Where to find a previously pickled StandadrScaler for
                         the SVM
+  -g, --debug           Debug mode - things like include all rectangles to
+                        output video and possibly print more logs.
 (carnd-term1) ciaran@ciaran-XPS-13-9360:sdc_term_1_proj_5$ 
+
 
 ```
 
@@ -83,7 +86,7 @@ The code to implement HOG feature extraction is contained in the method
 `get_hog()` and has the following docstring:
 
 ```python
-def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
+def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
     """Get a Histogram of Oriented Gradients for an image.
 
     "Note: you could also include a keyword to set the tranform_sqrt flag but
@@ -92,11 +95,13 @@ def get_hog(img, orient=11, pix_per_cell=16, cell_per_block=2, channel='all'):
 
     Args:
         img: the input image
-        orient: the number of orientation bins in the output histogram. Typical 
-            values are between 6 and 12
-        pix_per_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
+        orient: the number of orientation bins in the output histogram. Typical values 
+            are between 6 and 12
+        pixper_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
         cells_per_block: a 2-tuple giving the number of cells per block
         channel: which of the 3 color channels to get the HOG for, or 'all'
+        tcmap: target color map. the image will be converted to this color space 
+            before processing
 
     Returns:
         (features, hog_image) were the features are rolled out as a 1-D vector
@@ -110,15 +115,16 @@ objects in images. The HOG counts occurrences of gradient orientation in
 localized portions of an image. With HOG, a single vector is created that
 represents the object. The following parameters need to be chosen:
 
-* Orient: This is the number of orientation bins in the output histogram *
-Pixels per cell: The number of pixels to include in each cell of the HOG *
-Cells per block: The number of cells to include per block * Channel: Which of
-the 3 color channels to compute the HOG for
+* Orient: This is the number of orientation bins in the output histogram 
+* Pixels per cell: The number of pixels to include in each cell of the HOG 
+* Cells per block: The number of cells to include per block 
+* Channel: Which of the 3 color channels to compute the HOG for
+* Color map: what color map to apply to the image before processing
 
-For 'orient', I chose a value of 11 although the original research by Dalal
+For 'orient', I chose a value of 10 although the original research by Dalal
 and Triggs found that at least for detection of humans, a value of 9 was
 optimal. However the value 9 was causing the video pipeline to crash whereas a
-value of 11 worked fine both in terms of detection capability and program
+value of 10 worked fine both in terms of detection capability and program
 stability.
 
 The pixels per cell and cells per block determine the scaling of the
@@ -134,6 +140,11 @@ accuracy but also processing time).
 For channel, I chose 'all' which means the HOG will be computed over all color
 channels. This means that color will also be taken into account in the
 computation.
+
+For color map, I got some great feedback from my project reviewer who suggested 
+spending more time searching for an optimal color space for each of the feature
+extraction methods. I selected HSV for HOG extraction as it seemed to have the 
+best accuracy for the dataset.
 
 Below is a sample image that has been passed through the HOG method. As can be
 seen, the shape of the car is clearly delineated and can be easily identified.
@@ -182,8 +193,17 @@ from the classifier fit procedure. Therefore I augmented the not-car data with
 images that I took from the project video directly. Using the same sliding window
 method discussed later in this writeup, I was able to extract about 2,500 images
 that do not contain cars (most of the road sections in the video have no car visible).
-When I mixed this data in with the provided training data, I found that I got fewer 
-false positives, although I was not able to eliminate all.
+I also set the window positions to match the exact location where I was getting
+some false positives, and explicitly extract those locations as not car
+samples. This technique is called "Hard Negative Mining". When I mixed this
+data in with the provided training data, I found that I got fewer false
+positives, although I was not able to eliminate all.
+
+This was not enough however as the classiier still had problems detecting the
+white car. Therefore I extracted samples from the video of the white car and
+with advice from my project reviewer I generated variants of these samples
+using `scipy.ndimage.interpolation.shift()`, `scipy.ndimage.interpolation.rotate()` 
+and `cv2.warpAffine()` (see the relevant code in the file `get_newimgs.py`).
 
 Once training was complete, I pickled the classifier to disk for future use and
 to make it available for debugging the image pipeline. Importantly, I also pickled
@@ -300,31 +320,35 @@ time I could probably come up with a more optimal set of sliding windows.
 Below is the configuration code for the sliding windows which is contained in
 the `video_pipeline()` method in the script file:
 
-```python
+```python    
     #
     # Run far bounding boxes
     #
-    window_size = (32, 32)
-    overlap = 0.5
-    start_pos = (200, 400)
-    end_pos = (img.shape[1], 464)
+    window_size = (64, 64)
+    overlap = 0.25
+    start_pos = (700, 400)
+    end_pos = (img.shape[1], 465)
+
+    <code ommited>
 
     #
     # Run middle bounding boxes
     #
-    window_size = (64, 64)
+    window_size = (96, 96)
     overlap = 0.25
-    start_pos = (0, 380)
-    end_pos = (img.shape[1], 480)
-     
+    start_pos = (700, 380)
+    end_pos = (img.shape[1], 477)
+
+    <code ommited>
+
     #
     # Run near bounding boxes
     #
     window_size = (128, 128)
-    overlap = 0.5
-    start_pos = (0, 335)
+    overlap = 0.25
+    start_pos = (700, 335)
     end_pos = (img.shape[1], 535)
-
+ 
 ```
 
 Note that the start and end positions of the windows varies. This is to 
@@ -372,6 +396,10 @@ Here is an example of the result:
 
 ![black_car](./resources/black_car.png "Black Car")
 
+This was a strategy I took initially but eventually removed this line after
+further parameter tuning to make the white car more visible, and adding more
+training data as noted earlier. 
+
 With regards to optimizing the classifier, as noted previously I tried using
 GridSearchCV to find the best parameters, but found that I was overfitting the
 data and not getting the best results. I also tried to find thresholds in the
@@ -396,9 +424,7 @@ confirmed that the data was all of consistent size, type, that the number of
 car vs. non-car images was proportional, etc
 
 ```bash
-(carnd-term1) ciaran@ciaran-XPS-13-9360:sdc_term_1_proj_5$ python ./obj_detection.py -t -1 \
-    -s model_lc1_full_withkitti_mine.pk
-
+$ python ./obj_detection.py -t all -s model_lc1_full_with kitti_mine_v3.pkl
 Loading features and labels...
 Checking that all images have the same size, dtype and range...
   All images are consistent!
@@ -408,17 +434,17 @@ Checking that all images have the same size, dtype and range...
   File type counts: {'png': 17584}
 
 Loaded, extracted features, scaled and labeled 17,584 images, 8,792 cars and 8,792 not cars
-StandardScaler was pickled to model_lc1_full_withkitti_mine_scaler.pkl
-
+StandardScaler was pickled to model_lc1_full_withkitti_mine_v3_scaler.pkl
 Fitting data...
+
 SVC(C=1, cache_size=200, class_weight=None, coef0=0.0,
   decision_function_shape='ovr', degree=3, gamma='auto', kernel='linear',
   max_iter=-1, probability=True, random_state=None, shrinking=True,
   tol=0.001, verbose=False)
-Final score on test set: 0.9880580039806653
+Final score on test set: 0.9835086721637759
 
-Model was saved to model_lc1_full_withkitti_mine.pkl
-(carnd-term1) ciaran@ciaran-XPS-13-9360:sdc_term_1_proj_5$ 
+Model was saved to model_lc1_full_withkitti_mine_v3.pkl
+$
 
 ```
 
@@ -495,26 +521,58 @@ And here is an example of the process in action:
 
 ![heatmap](./resources/heatmap.png "Heatmap")
 
+In addition to this, I also included a python deque which is a data structure
+that only allows a fixed number of elements. This can be used as an easy way to
+track the history of the detected boxes. I then checked each new detection to
+see if the the center of the new prediction was contained in any of the boxes
+in this history object. If the new detection was not present, I discarded it as
+a false positive, 
+
+Another mechanism to reduce false positivies is to store the heatmaps over some
+number of frames and sum them together before labeling them. This should have
+the effect of smoothing out the boxes and reducing false positivies.
+
+```python
+    history = deque(maxlen=1)
+
+    heat_size = 5
+    heat_history = deque(maxlen=heat_size)
+
+    prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
+    if prediction == 1:
+        center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
+        hit = False
+        for past_box in history:
+            if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
+                and center[1] > past_box[0][1] and center[1] < past_box[1][1]):
+                    hit = True
+        if hit or len(history) == 0:
+            history.append(box)
+            car_boxes.append(box)
+
+    heat_history.append(heatmap) 
+    labels = label(sum(heat_history))
+    draw_labeled_bboxes(img_, labels)
+
+```
 
 ### Discussion
 
 Like all the Udacity projects, this was a very interesting one, but also a very
-challenging one that took a lot more time than anticipated. Although I'm
+challenging one that took far more time than anticipated. Although I'm
 disappointed with the quality of the detection in the final output, I did get
 a very good sense of the potential that Computer Vision combined with machine
 learning techniques like Support Vector Machines, Decision Trees and/or Deep
 Neural Networks could have. 
 
-The implementation does not do well with white cars and would probably
-struggle to deal with a very busy environment with many cars all around. It
-obviously fails to detect the white car once it's a certain distance from the
-camera which is frustrating. Unfortunately I was not able to find time to
-further debug this. Being so sensitive to color is obviously a major weakness
-and therefore a better understanding of the available color spaces would be
-needed to take it further.  If combining this with lane detection, traffic
-light detection and more, then multiple parallel pipelines would surely be
-required, each with it's own pre-processing, thresholds, classification model,
-etc.
+The implementation did not do well with white cars and after working to address
+that problem, it started to do worst with the black car. Unfortunately I was not 
+able to find time to further debug this. Being so sensitive to color is
+obviously a major weakness and therefore a better understanding of the
+available color spaces would be needed to take it further. If combining this
+with lane detection, traffic light detection and more, then multiple parallel
+pipelines would surely be required, each with it's own pre-processing,
+thresholds, classification model, etc.
 
 One major problem that I faced was realizing that the StandardScaler object
 needs to be persisted and reused. It was not obvious to me in the documentation
@@ -539,14 +597,6 @@ One interesting aspect of this project and the last one is the efficiency of the
 pipeline processing. The final implementation in this repo takes in the order
 of 2 hours to process a 50s video. Obviously in a real car one would need to be
 able to process video in real-time, meaning each frame would need to be fully
-processed and actuated in something like 1ms to 2ms. I wonder if this could be
-possible with Python (ignoring the safety issues with using Python in such
-a context). The underlying libs. e.g. OpenCV are multithreaded as far as
-I know, so the Global Lock in Python can be removed as a bottleneck to
-implementing a multithreaded approach. It would also be possible to segment the
-pipeline into multiple processes to provide additional parallelism. If running
-on an Intel platform, Intel provides optimized implementations of Python and
-many libs such as NumPy and TensorFlow. On toy problems these optimized libs
-haven been shown to run literally thousands of times faster than the standard
-implementations. An interesting follow up would be to see just how fast such an
-object detection and tracking script could be made to run. 
+processed and actuated in something like 1ms to 2ms.  An interesting follow up
+would be to see just how fast such an object detection and tracking script
+could be made to run. 

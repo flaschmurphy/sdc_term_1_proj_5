@@ -11,6 +11,7 @@ import pickle
 import glob
 import time
 import cv2
+import os
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from argparse import ArgumentParser
@@ -56,52 +57,44 @@ def test_predictions():
 
 def test_windowing():
     """Test boxes returned from `get_window_points()`. """
+    img = cv2.imread('./training_images/my_images/seed.png')
     print()
     #
-    # Far boxes
+    # Run far bounding boxes
     #
-    print('Testing get_window_points() for far boxes...')
-    img_size = (720, 1216, 3)
     window_size = (64, 64)
     overlap = 0.25
-    start_pos = (200, 400)
-    end_pos = (1280, 464)
-    bboxes_far = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    #assert len(bboxes_far) == 29, 'Incorrect number of windows, got {}, should be 29.'.format(
-    #        len(bboxes_far))
-
+    start_pos = (700, 400)
+    end_pos = (img.shape[1], 465)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('far_')
+    
     #
-    # Middle boxes
+    # Run middle bounding boxes
     #
-    print('Testing get_window_points() for middle boxes...')
-    img_size = (720, 1280, 3)
-    window_size = (250, 100)
+    window_size = (96, 96)
     overlap = 0.25
-    start_pos = (0, 380)
-    end_pos = (1280, 480)
-    bboxes_middle = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    #assert len(bboxes_middle) == 14, 'Incorrect number of windows, got {}, should be 14.'.format(
-    #        len(bboxes_middle))
+    start_pos = (700, 380)
+    end_pos = (img.shape[1], 477)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('mid_')
 
     #
-    # Near boxes
+    # Run near bounding boxes
     #
-    print('Testing get_window_points() for near boxes...')
-    img_size = (720, 1280, 3)
-    window_size = (200, 200)
-    overlap = 0.5
-    start_pos = (0, 335)
-    end_pos = (1280, 535)
-    bboxes_near = get_window_points(img_size, window_size, overlap, start=start_pos, end=end_pos)
-    #assert len(bboxes_near) == 46, 'Incorrect number of windows, got {}, should be 46.'.format(
-    #        len(bboxes_near))
-    print(len(bboxes_near))
+    window_size = (128, 128)
+    overlap = 0.25
+    start_pos = (700, 335)
+    end_pos = (img.shape[1], 535)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('near_')
 
     # Visualize the results
     vis = True
     if vis:
         #fname = './test_images/bbox-example-image.jpg'
-        fname = './test_frames/frame_031.png'
+        #fname = './test_frames/frame_031.png'
+        fname = './test_frames/vlcsnap-2017-12-07-17h34m52s922.png'
         get_clr = lambda: np.random.randint(255, size=3).tolist()
 
         plt.close()
@@ -123,7 +116,7 @@ def test_windowing():
         imshow(canvas3, axis=ax3)
 
         plt.tight_layout()
-        plt.show()
+        plt.show(block=True)
 
         plt.pause(2)
         plt.close()
@@ -136,39 +129,81 @@ def test_sliding_window_predictions(fname=None, vis=True):
     #
     # Run a scan over an image and retain any boxes where a car is detected
     #
+    global clf, scaler_fname
+
     if fname is None:
         #img = imread('./test_images/bbox-example-image.jpg')
-        img = imread('./test_frames/frame_040.png')
+        #img = imread('./test_frames/frame_040.png')
+        #img = imread('./test_frames/vlcsnap-2017-12-07-17h34m52s922.png')
+        pass
     else:
         img = imread(fname)
         print('Loaded {} with shape {}'.format(fname, img.shape))
 
+    get_clr = lambda: np.random.randint(255, size=3).tolist()
+
+    car_boxes, all_boxes = [], []
+
+    plt.close()
+    plt.ion()
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
+
+    # Short helper to avoid repeating code
+    def check_boxes(prefix):
+        for box in bboxes:
+            all_boxes.append(box)
+            top_left, bottom_right = box
+            sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+
+            prediction = predict(
+                    sub_img, clf, scaler_fname, 
+                    fname=fname, vis=False, verbose=True
+                )
+
+            plt.sca(ax1)
+            plt.cla()
+            plt.sca(ax2)
+            plt.cla()
+            img_ = img.copy()
+            cv2.rectangle(img_, *box, get_clr(), 2)
+            ax1.imshow(img_[:,:,::-1]/255)
+            ax2.imshow(sub_img[:,:,::-1]/255)
+            plt.tight_layout()
+            plt.show()
+            plt.pause(0.0001)
+            
+            if prediction == 1:
+                car_boxes.append(box)
+     
     #
     # Run far bounding boxes
     #
-    window_size = (32, 32)
+    window_size = (64, 64)
     overlap = 0.25
-    start_pos = (200, 400)
-    end_pos = (img.shape[1], 464)
-    bboxes_far = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-
+    start_pos = (700, 400)
+    end_pos = (img.shape[1], 465)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('far_')
+    
     #
     # Run middle bounding boxes
     #
-    window_size = (64, 64)
+    window_size = (96, 96)
     overlap = 0.25
-    start_pos = (0, 380)
-    end_pos = (img.shape[1], 480)
-    bboxes_mid = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    start_pos = (700, 380)
+    end_pos = (img.shape[1], 477)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('mid_')
 
     #
     # Run near bounding boxes
     #
     window_size = (128, 128)
-    overlap = 0.5
-    start_pos = (0, 335)
+    overlap = 0.25
+    start_pos = (700, 335)
     end_pos = (img.shape[1], 535)
-    bboxes_near = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    check_boxes('near_')
 
     # If True, show realtime visualizations
     if vis:
@@ -182,24 +217,15 @@ def test_sliding_window_predictions(fname=None, vis=True):
     # Load the classifier
     clf = get_svm_model(model_file=args.clf)
 
-    get_clr = lambda: np.random.randint(255, size=3).tolist()
 
     cnt = 0
-    car_boxes = []
-    for box in bboxes_far + bboxes_mid + bboxes_near:
-        top_left, bottom_right = box
-        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
-
-        prediction = predict(sub_img, clf, scaler_fname, 
-                fname='./test_images/bbox-example-image.jpg', vis=False, verbose=True)
-
-        # Store any box that the classifier things contains a car
-        if prediction == 1:
-            car_boxes.append(box)
-
-        if vis:
-            display_img_ = display_img.copy()
+    if vis:
+        for box in all_boxes:
             cv2.rectangle(display_img_, *box, get_clr(), 1)
+
+        for box in car_boxes:
+            display_img_ = display_img.copy()
+            cv2.rectangle(display_img_, *box, get_clr(), 3)
 
             # If a car was predicted, keep the box painted
             if prediction == 1:
@@ -263,23 +289,25 @@ def test_heatmap(fname, car_boxes):
 
 
 def main():
-    global args, scaler_fname
+    global args, clf, scaler_fname
 
     args = parse_args()
+    clf = pickle.load(open(args.clf, 'rb'))
     scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
 
-    test_predictions()
+    #test_predictions()
  
     test_windowing()
+    #test_sliding_window_predictions()
 
-    test_sliding_window_predictions()
+    #for fname in glob.glob('./test_frames/*.png') + glob.glob('./test_frames/*.jpg'):
+    #for fname in ['./training_images/my_images/seed2.png']:
+    #    print(fname)
+    #    car_boxes = test_sliding_window_predictions(fname)
 
-    for fname in glob.glob('./test_frames/*'):
-        car_boxes = test_sliding_window_predictions(fname)
-
-    for fname in glob.glob('./test_frames/*')[:10]:
-        car_boxes = test_sliding_window_predictions(fname, vis=False)
-        test_heatmap(fname, car_boxes)
+    #for fname in glob.glob('./test_frames/*')[:10]:
+    #    car_boxes = test_sliding_window_predictions(fname, vis=False)
+    #    test_heatmap(fname, car_boxes)
 
 
 if __name__ == '__main__':
