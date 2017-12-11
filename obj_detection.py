@@ -13,6 +13,7 @@ import cv2
 import sys
 import pickle
 import tempfile
+import shutil
 import numpy as np
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -24,30 +25,28 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
-
 from scipy.ndimage.measurements import label
-
 from skimage.feature import hog
 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('training_images/my_images/car/*.png')[:1000]
-CAR_FNAMES += glob.glob('training_images/my_images/car2/*.png')[:1000]
+CAR_FNAMES = glob.glob('training_images/my_images/car2/*.jpg')[:2000]
+CAR_FNAMES += glob.glob('training_images/my_images/car3/*.jpg')[:2000]
 CAR_FNAMES += glob.glob('./training_images/vehicles/*/*.png')
 #CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
-NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')
+NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')[:3000]
+NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar2/*.jpg')[:3000]
 #NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
-NOTCAR_FNAMES = glob.glob('./training_images/non-vehicles/*/*.png')
+NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/*/*.png')
 NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
 
 #######################################################################################################
 #
-# Helper functions
+# Helper functions and classes
 #
 #######################################################################################################
 
@@ -55,7 +54,7 @@ def parse_args():
     parser = ArgumentParser()
 
     ex_group = parser.add_mutually_exclusive_group(required=True)
-    ex_group.add_argument('-t', '--train', dest='train_size',
+    ex_group.add_argument('-t', '--train', dest='trainsize',
             help="""Include the training step and use TRAIN value as the number of _notcar_ samples to 
             use for training on. Specify 'all' to train on all available data. If not including 
             training, must specify a classifier to load from disk (a previously pickled one) 
@@ -89,19 +88,23 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.train_size is None:
+    if args.trainsize is None:
+        args.train = False
         if args.clf_fname is None:
             parser.print_usage()
             sys.exit()
-
         if args.scaler_fname is None:
             args.scaler_fname = ''.join(args.clf_fname.split('.')[:-1]) + '_scaler.pkl'
- 
-    if args.train_size is not None and args.save_file is None:
-        print('!!! WARNING !!! Trained model will not be stored to disk!')
 
-    if args.train_size == 'all':
-        args.train_size = -1
+    else:
+        args.train = True
+        if args.trainsize == 'all':
+            args.trainsize = -1
+        else:
+            args.trainsize = int(args.trainsize)
+ 
+    if args.save_file is None:
+        print('!!! WARNING !!! Trained model will not be stored to disk.')
 
     return args
 
@@ -174,8 +177,7 @@ def color_xform(img, tcmap):
 
 
 def draw_labeled_bboxes(img, labels):
-    """Borrowed from Udacity lesson. Take in a labels canvas and use it to overlay
-    bounding rectangles for detected objects.
+    """Take in a labels canvas and use it to overlay bounding rectangles for detected objects.
     
     Args:
         img: the image to modify
@@ -193,11 +195,35 @@ def draw_labeled_bboxes(img, labels):
         nonzeroy = np.array(nonzero[0])
         nonzerox = np.array(nonzero[1])
 
-        # Define a bounding box based on min/max x and y
-        bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+        nonzeroy_height = np.max(nonzeroy) - np.min(nonzeroy)
+        if nonzeroy_height > 150:
+            mid = np.min(nonzeroy) + nonzeroy_height//2
+            nonzeroy = nonzeroy[(nonzeroy >= mid-32) & (nonzeroy <= mid+32)]
 
-        # Draw the box on the image
-        cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 2)
+        nonzerox_length = np.max(nonzerox) - np.min(nonzerox)
+        if nonzerox_length > 250:
+            print('Splitting...')
+            section_length = nonzerox_length // 6
+            box_left = (
+                    (np.min(nonzerox) + section_length, np.min(nonzeroy)), 
+                    (np.min(nonzerox)+2*section_length, np.max(nonzeroy))
+                )
+            box_right = (
+                    (np.max(nonzerox)-2*section_length, np.min(nonzeroy)), 
+                    (np.max(nonzerox) - section_length, np.max(nonzeroy))
+                )
+
+            img = cv2.rectangle(img, box_left[0], box_left[1], (11,102,0), 4)
+            img = cv2.rectangle(img, box_right[0], box_right[1], (11,102,0), 4)
+
+        else:
+            # Define a bounding box based on min/max x and y
+            bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+
+            # Draw the box on the image
+            img = cv2.rectangle(img, bbox[0], bbox[1], (11,102,0), 4)
+
+        return img
 
 
 def video_extract(src_fname, t1, t2, tgt_fname=None):
@@ -216,6 +242,14 @@ def video_extract(src_fname, t1, t2, tgt_fname=None):
     ffmpeg_extract_subclip(src_fname, t1, t2, targetname=tgt_fname)
 
     return tgt_fname
+
+
+class Bunch():
+    """Convience class to enable dot style notation on a dict"""
+    def __init__(self, adict):
+        self.__dict__.update(adict)
+    def __repr__(self):
+        return self.__dict__.__repr__()
 
 
 #######################################################################################################
@@ -426,129 +460,138 @@ def video_pipeline(img):
         a new image with boxes drawn where cars are predicted
 
     """
-
+    global args, conf
+    
     if 'cnt' not in video_pipeline.__dict__:
         video_pipeline.cnt = 0
     video_pipeline.cnt += 1
 
-    # To improve processing times, only process every Nth frame when debugging.
-    n = 5
-    if args.debug and video_pipeline.cnt % n != 0:
+    if args.debug and video_pipeline.cnt % conf.n != 0:
         return img
 
     fname = 'video_frame_{:04}.png'.format(video_pipeline.cnt) # a dummy file name needed by pipeline()
 
-    img = img.copy()[:,:,::-1] # converts from RGB to BGR
-    car_boxes = []
-
-    # Change the white car that's causing problems into a black car. Note that this needs to be done during 
-    # training as well to be effective.
-    #img[np.sum(img, axis=2) > 550] = 0
+    # Convert from RGB which is what moviepy loads in to BGR which is what the
+    # rest of this script us using (cv2 default)
+    img = img.copy()[:,:,::-1] 
 
     # Lambda to generate a random color
     get_clr = lambda: np.random.randint(255, size=3).tolist()
 
-    # Create a history deque to track car detection boxes
-    hist_size = 20
-    history = deque(maxlen=hist_size)
 
-    heat_size = 5
-    heat_history = deque(maxlen=heat_size)
-
+    ###############################################################################################################
     #
-    # Run far bounding boxes
+    # Define a method to sanity check the boxes and append them to the main array if they look ok
     #
-    window_size = (64, 64)
-    overlap = 0.25
-    start_pos = (700, 400)
-    end_pos = (img.shape[1], 465)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    ###############################################################################################################
+    frame_boxes = []
+    to_be_painted = []
 
-    for box in bboxes:
-        top_left, bottom_right = box
-        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+    def process_boxes(pstr, img, img_dbg):
+        for box in bboxes:
+            top_left, bottom_right = box
+            sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+            prediction = predict(sub_img, conf.clf, args.scaler_fname, fname=pstr + fname, vis=False, verbose=True)
+            if prediction == 1:
+                frame_boxes.append(box)
+                img, img_dbg = process_box(img, img_dbg, box, to_be_painted)
 
-        prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
-        if prediction == 1:
-            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hits = 0
-            for past_box in history:
-                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
-                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]):
+        return img, img_dbg
+
+    def process_box(img, img_dbg, box, to_be_painted):
+        # Find the center of the new box
+        center = (box[0][0] + ((box[1][0] - box[0][0]) // 2), box[0][1] + ((box[1][1] - box[0][1]) // 2))
+
+        # If the new box has it's center contained within the boxes discovered
+        # in the last N frames (= hist_size) consider it valid otherwise reject
+        # it. If in debug mode, draw a circle to indicate that it was rejected.
+        hits = 0
+        for pastframe in conf.frame_box_history:
+            for pastbox in pastframe:
+                if (center[0] > pastbox[0][0] and center[0] < pastbox[1][0] 
+                    and center[1] > pastbox[0][1] and center[1] < pastbox[1][1]):
                         hits += 1
-            if hits >= hist_size or len(history) != hist_size:
-                history.append(box)
-                car_boxes.append(box)
+                        break
+
+        if hits == conf.hist_size and video_pipeline.cnt > conf.hist_size:
+            to_be_painted.append(box)
+            if args.debug:
+                img_dbg = cv2.circle(img_dbg, center, 20, (255,255,255), 1)
+        elif args.debug:
+            img_dbg = cv2.circle(img_dbg, center, 20, (0,0,255), 1)
+
+        return img, img_dbg
+
+    ###############################################################################################################
+
+    img_dbg = img.copy()
+
+    #
+    # Far bounding boxes
+    #
+    bboxes = get_window_points(img.shape, conf.far_window_size, conf.far_overlap, 
+            start=conf.far_start_pos, end=conf.far_end_pos)
+    img, img_dbg = process_boxes('far_', img, img_dbg)
     
     #
-    # Run middle bounding boxes
+    # Middle bounding boxes
     #
-    window_size = (96, 96)
-    overlap = 0.5
-    start_pos = (700, 380)
-    end_pos = (img.shape[1], 477)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-
-    for box in bboxes:
-        top_left, bottom_right = box
-        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
-
-        prediction = predict(sub_img, CLF, args.scaler_fname, fname='mid_' + fname, vis=False, verbose=True)
-        if prediction == 1:
-            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hits = 0
-            for past_box in history:
-                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
-                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
-                        hits += 1
-            if hits >= hist_size or len(history) != hist_size:
-                history.append(box)
-                car_boxes.append(box)
+    bboxes = get_window_points(img.shape, conf.mid_window_size, conf.mid_overlap, 
+            start=conf.mid_start_pos, end=conf.mid_end_pos)
+    img, img_dbg = process_boxes('mid_', img, img_dbg)
      
     #
-    # Run near bounding boxes
+    # Near bounding boxes
     #
-    window_size = (128, 128)
-    overlap = 0.5
-    start_pos = (700, 335)
-    end_pos = (img.shape[1], 535)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    bboxes = get_window_points(img.shape, conf.near_window_size, conf.near_overlap, 
+            start=conf.near_start_pos, end=conf.near_end_pos)
+    img, img_dbg = process_boxes('near_', img, img_dbg)
 
-    for box in bboxes:
-        top_left, bottom_right = box
-        sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
-
-        prediction = predict(sub_img, CLF, args.scaler_fname, fname='near_' + fname, vis=False, verbose=True)
-        if prediction == 1:
-            center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-            hits = 0
-            for past_box in history:
-                if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
-                    and center[1] > past_box[0][1] and center[1] < past_box[1][1]) or len(history) == 0:
-                        hits += 1
-            if hits >= hist_size or len(history) != hist_size:
-                history.append(box)
-                car_boxes.append(box)
+    conf.frame_box_history.append(frame_boxes)
 
     # Some annoying bug in cv2 that needs this copy workaround :( :(
-    img_ = img.copy()
+    img = img.copy()
+    img_dbg = img_dbg.copy()
 
-    threshold = 180
+    if args.debug is True:
+        # Draw all positive prediction boxes before any filtering
+        for box in frame_boxes:
+            img_dbg = cv2.rectangle(img, box[0], box[1], (255, 255, 255), 1)
+        # Draw all positive prediction boxes before after the history filter
+        for box in to_be_painted:
+            img_dbg = cv2.rectangle(img, box[0], box[1], (0, 102, 255), 1)
+
+    # Increment the heatmap, conpare it to history and draw the labels
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
-    for box in car_boxes:
-        # Add a thin box for all detections (not just those bigger than the threshold) when debugging
-        if args.debug is True:
-            img_ = cv2.rectangle(img_, box[0], box[1], get_clr(), 1)
-        heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
+    for box in to_be_painted:
+        heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 1
 
-    heatmap[heatmap <= threshold] = 0
+    if args.debug:
+        plt.imsave(conf.dst1 + '{:04}.jpg'.format(video_pipeline.cnt), heatmap, cmap='gray')
 
-    heat_history.append(heatmap)
+    heatmap[heatmap < conf.threshold] = 0
 
-    labels = label(sum(heat_history))
-    draw_labeled_bboxes(img_, labels)
+    if args.debug:
+        plt.imsave(conf.dst2 + '{:04}.jpg'.format(video_pipeline.cnt), heatmap, cmap='gray')
 
-    return img_[:,:,::-1]
+    if conf.enable_heathist:
+        conf.frame_heat_history.append(heatmap)
+        labels = label(np.sum(conf.frame_heat_history, axis=0))
+    else:
+        labels = label(heatmap)
+
+    if labels[1] > 0:
+        img = draw_labeled_bboxes(img, labels)
+        img_dbg = draw_labeled_bboxes(img_dbg, labels)
+
+    # Convert back to RGB for moviepy
+    img = img[:,:,::-1]
+    img_dbg = img_dbg[:,:,::-1]
+
+    if args.debug is True:
+        return img_dbg
+    else:
+        return img
 
 
 #######################################################################################################
@@ -569,8 +612,8 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
             not contain a car.
         length: the amount of data to load per car or notcar, meaning a value of 2500 will
             try to load 2500 car or notcar images depending on the value of car_or_not
-        random: if True, instead of returning a generator for images, return a single fname
-            and image selected at random
+        random: if True, instead of returning many images, return a single fname,
+            image and index selected at random
         sanity: if True print out some info about the data and verify it's consistency
         vis: if True, display a random sample image
 
@@ -670,7 +713,7 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
 
             # The classifier seems to have a problem with the white car in the 
             # video so I'm changing it to a black car using the line below. 
-            img[np.sum(img, axis=2) > 550] = 0
+            #img[np.sum(img, axis=2) > 550] = 0
 
             ret.append([f, img, i])
             i += 1
@@ -740,6 +783,8 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
         a trained SVM model
 
     """
+    global conf
+
     if train is False:
         assert model_file is not None, 'Must specify a model file if not training'
         assert os.path.exists(model_file), 'Model file does not exist'
@@ -748,6 +793,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
             clf = pickle.load(f)
 
         print('Model was loaded from disk at location: {}.'.format(model_file))
+        [print('  ' + l) for l in clf.__repr__().split('\n')]
         return clf
 
     assert X is not None, 'Must supply features for training'
@@ -757,6 +803,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     # Set the amount of data to use for training the classifier.
     if subset_size is None or subset_size < 0:
         subset_size = len(y)
+
     idx = np.random.permutation(X.shape[0])[:subset_size]
     X_subset = X[idx]
     y_subset = y[idx]
@@ -774,7 +821,7 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
             #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [0.001, 0.001, 1, 10, 100]},
         ]
     if grid_search:
-        clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
+        clf = GridSearchCV(conf.svc(probability=True), parameters, cv=3, verbose=9)
     else:
         clf = SVC(kernel='linear', C=1, probability=True) 
         #clf = SVC(kernel='linear', C=0.1, probability=True) 
@@ -811,9 +858,13 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
     img_new = cv2.resize(img, (64, 64))
     features = pipeline([[fname, img_new, 0]])
 
-    scaler = pickle.load(open(scaler_pkl, 'rb'))
-    features = scaler.transform(features)
+    if 'scaler' not in predict.__dict__:
+        scaler = pickle.load(open(scaler_pkl, 'rb'))
+        predict.scaler = scaler
+    else:
+        scaler = predict.scaler
 
+    features = scaler.transform(features)
     prediction = clf.predict(features)[0]
     probs = clf.predict_proba(features)[0]
 
@@ -844,28 +895,71 @@ def predict(img, clf, scaler_pkl, fname='unknown', car=None, vis=False, verbose=
 #
 #######################################################################################################
 
-def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None):
-    """Main entry point.
-
-    * Feature extraction: 
-       - Raw pixel intensity:              color and shape
-       - Histogram of pixel intensity:     color only
-       - Gradients of pixel intensity:     shape only
-
-    Args:
-        train: if True, run training
-        save_file: if not None and training, save the model to this location after training
-        subset_size: limits the amount of data used for training, default is all data
-        model_file; where to save the trained model to
-        args: all command line args
-
+def main():
+    """Main entry point 
     """
-    global CLF
-    if train is False:
-        CLF = get_svm_model(model_file=model_file)
+    global conf
+
+    # Create a history deque to track car detection boxes
+    main.hist_size = 20
+    main.enable_boxhist = True
+
+    # Also create a history of heatmaps. The sum of all heatmaps will be 
+    # used to detect objects instead of using just the heatmap from the current
+    # image
+    main.heat_size = 25
+    main.enable_heathist = False
+
+    # Threshold for the heatmap. Any pixels in the heatmap less than this 
+    # value will be forced to zero
+    main.threshold = 10 
+
+    # To improve processing times, only process every Nth frame when debugging.
+    # For all other frames, return the current image with the last known rectangles redrawn
+    main.n = 2
+
+    #
+    # Far bounding boxes
+    #
+    main.far_window_size = (64, 64)
+    main.far_overlap = 0.5
+    main.far_start_pos = (700, 400)
+    main.far_end_pos = (1280, 496)
+    #
+    # Middle bounding boxes
+    #
+    main.mid_window_size = (96, 96)
+    main.mid_overlap = 0.3
+    main.mid_start_pos = (700, 380)
+    main.mid_end_pos = (1280, 500)
+    #
+    # Near bounding boxes
+    #
+    main.near_window_size = (128, 128)
+    main.near_overlap = 0.3
+    main.near_start_pos = (700, 335)
+    main.near_end_pos = (1280, 635)
+    #
+
+    main.frame_box_history = deque(maxlen=main.hist_size)
+    main.frame_heat_history = deque(maxlen=main.heat_size)
+
+    if args.train is False:
+        main.clf = get_svm_model(model_file=args.clf_fname)
+
+        if args.debug:
+            main.dst1 = './output/heat1/'
+            main.dst2 = './output/heat2/'
+            if os.path.exists(main.dst1):
+                shutil.rmtree(main.dst1)
+            if os.path.exists(main.dst2):
+                shutil.rmtree(main.dst2)
+            os.makedirs(main.dst1)
+            os.makedirs(main.dst2)
+
         if args.input_video is not None:
             assert args.output_video is not None, 'Must specify an output video.'
-            assert model_file is not None, 'Must provide an SVM model.'
+            assert args.clf_fname is not None, 'Must provide an SVM model.'
             
             print('Processing video...')
             if args.video_start is not None:
@@ -875,20 +969,20 @@ def main(train=False, save_file=None, subset_size=-1, model_file=None, args=None
                 input_video = args.input_video
 
             vin = VideoFileClip(input_video)
+            conf = Bunch(main.__dict__)
             vout = vin.fl_image(video_pipeline)
             vout.write_videofile(args.output_video, audio=False)
 
     else:
-        if save_file is not None and os.path.exists(save_file): 
-            print('!!! WARNING !!! Previous model ({}) to be overwritten !!'.format(
-                save_file))
+        if args.save_file is not None and os.path.exists(args.save_file): 
+            print('!!! WARNING !!! Previous model ({}) to be overwritten.'.format(args.save_file))
 
-        X, y =  get_xy(clf_fname=save_file, length=subset_size)
-        clf = get_svm_model(train=True, X=X, y=y, subset_size=subset_size, model_file=model_file)
+        X, y =  get_xy(clf_fname=args.save_file, length=args.trainsize)
+        clf = get_svm_model(train=True, X=X, y=y, subset_size=args.trainsize, model_file=args.clf_fname)
 
-        if save_file is not None:
-            pickle.dump(clf, open(save_file, 'wb'))
-            print('Model was saved to {}'.format(save_file))
+        if args.save_file is not None:
+            pickle.dump(clf, open(args.save_file, 'wb'))
+            print('Model was saved to {}'.format(args.save_file))
 
 
 #######################################################################################################
@@ -979,15 +1073,8 @@ def get_window_points(img_size, window_size=(64, 64), overlap=0.5, start=(0, 0),
 
 
 if __name__ == '__main__':
+    global args
     args = parse_args()
-    if args.train_size is None:
-        train = False
-        trainsize = -1
-    else:
-        train = True
-        trainsize = int(args.train_size)
-
-    main(train=train, subset_size=trainsize, save_file=args.save_file, 
-            model_file=args.clf_fname, args=args)
+    main()
 
 

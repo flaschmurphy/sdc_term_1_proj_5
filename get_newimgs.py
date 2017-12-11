@@ -6,8 +6,8 @@ import scipy.ndimage
 import random
 import sys
 
-dstdir = 'training_images/my_images/car2/'
-wsizes = [64, 96, 128]
+dstdir = 'training_images/my_images/car3/'
+wsizes = [64, ]
 
 def create_variant(img):
     if (random.choice([1, 0])):
@@ -38,14 +38,16 @@ get_bright = lambda xy, wsize: tuple([_+wsize for _ in xy])
 get_clr = lambda: np.random.randint(255, size=3).tolist() 
 imsave = lambda img: cv2.imwrite(get_fname(), img)
 
-fname = 'training_images/my_images/seed2.png'
+fname = 'training_images/my_images/seed_car_2.png'
+#fname = 'training_images/my_images/seed_not_car1.png'
+#fname = 'training_images/my_images/seed2.png'
 #fname = 'training_images/my_images/seed.png'
 img = cv2.imread(fname)
 
 #plt.ion()
 #f = plt.figure(figsize=(20, 10))
 
-xy = np.array((864, 394))
+xy = np.array((914, 424))
 for wsize in wsizes:
     if wsize == 64:
         cnt = 0
@@ -53,8 +55,8 @@ for wsize in wsizes:
         sys.stdout.write('\n')
         sys.stdout.flush()
 
-        for y in range(44):
-            for x in range(95):
+        for y in range(0, 109, 3):
+            for x in range(0, 141, 3):
                 top_left = (xy[0]+x, xy[1]+y)
                 bottom_right = (xy[0]+64+x, xy[1]+64+y)
                 img_ = img.copy()
@@ -82,3 +84,4 @@ for wsize in wsizes:
 
 
 sys.stdout.write('\n')
+
