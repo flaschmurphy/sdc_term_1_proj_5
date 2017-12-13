@@ -32,7 +32,7 @@ NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/*/*.png')
 NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
 idx = np.random.permutation(len(CAR_FNAMES))
-n = 1000
+n = 10
 CAR_FNAMES = np.array(CAR_FNAMES)[idx].tolist()[:n]
 NOTCAR_FNAMES = np.array(NOTCAR_FNAMES)[idx].tolist()[:n]
 
@@ -631,18 +631,45 @@ ID	tcmap	pix_per_cell	cell_per_block	orient	xform
 data = StringIO(hog_candidates_csv)
 hgcfgs = pd.read_csv(data, sep='\t')
 
-res = []
-for i in range(len(hgcfgs)):
-    kwargs = dict(hgcfgs.iloc[i][1:])
-    X, y =  get_xy(kwargs, clf_fname='/var/tmp/tmp_model.pkl')
-    if X is not None and y is not None:
-        clf, score = get_svm_model(train=True, X=X, y=y)
-        res.append([dict(hgcfgs.iloc[i]), score])
-        print('{}: {}'.format(dict(hgcfgs.iloc[i]), score))
-    else:
-        res.append([dict(hgcfgs.iloc[i]), None])
-        print('{}: {}'.format(dict(hgcfgs.iloc[i]), None))
+# Enable or disable the grid search
+execute_full = True
 
-with open('./hog_param_serach.pkl', 'wb') as f:
-    pickle.dump(res, f)
+res = [hgcfgs.columns.tolist() + ['score']]
+print('{}: {}'.format(res[0][:-1], 'score'))
+if execute_full:
+    for i in range(len(hgcfgs)):
+        kwargs = dict(hgcfgs.iloc[i][1:])
+        X, y =  get_xy(kwargs, clf_fname='/var/tmp/tmp_model.pkl')
+        if X is not None and y is not None:
+            clf, score = get_svm_model(train=True, X=X, y=y)
+            res.append(hgcfgs.iloc[i].tolist() + [score])
+            print('{}: {}'.format(hgcfgs.iloc[i].tolist(), score))
+        else:
+            res.append(hgcfgs.iloc[i].tolist() + [None])
+            print('{}: {}'.format(hgcfgs.iloc[i].tolist(), None))
+
+    with open('./hog_param_serach.pkl', 'wb') as f:
+        pickle.dump(res, f)
+else:
+    res = pickle.load(open('./hog_param_search.pkl', 'rb'))
+
+df = pd.DataFrame(res[1:], columns=res[0])
+df.set_index('ID')
+
+
+getx = lambda color: np.where(colors == color)[0][0]*10
+
+#@TODO: visualize the dataframe and show the best params
+
+
+
+
+
+
+
+
+
+
+
+
 

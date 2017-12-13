@@ -33,13 +33,13 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('training_images/my_images/car2/*.jpg')[:2000]
-CAR_FNAMES += glob.glob('training_images/my_images/car3/*.jpg')[:2000]
+CAR_FNAMES = glob.glob('training_images/my_images/car2/*.jpg')[:5000]
+CAR_FNAMES += glob.glob('training_images/my_images/car3/*.jpg')[:5000]
 CAR_FNAMES += glob.glob('./training_images/vehicles/*/*.png')
-#CAR_FNAMES = glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
+#CAR_FNAMES += glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')[:3000]
 NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar2/*.jpg')[:3000]
-#NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
+NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/*/*.png')
 NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
@@ -196,32 +196,33 @@ def draw_labeled_bboxes(img, labels):
         nonzerox = np.array(nonzero[1])
 
         nonzeroy_height = np.max(nonzeroy) - np.min(nonzeroy)
-        if nonzeroy_height > 150:
-            mid = np.min(nonzeroy) + nonzeroy_height//2
-            nonzeroy = nonzeroy[(nonzeroy >= mid-32) & (nonzeroy <= mid+32)]
+
+        #if nonzeroy_height > 200:
+        #    mid = np.min(nonzeroy) + nonzeroy_height//2
+        #    nonzeroy = nonzeroy[(nonzeroy >= mid-42) & (nonzeroy <= mid+42)]
 
         nonzerox_length = np.max(nonzerox) - np.min(nonzerox)
-        if nonzerox_length > 250:
-            print('Splitting...')
-            section_length = nonzerox_length // 6
-            box_left = (
-                    (np.min(nonzerox) + section_length, np.min(nonzeroy)), 
-                    (np.min(nonzerox)+2*section_length, np.max(nonzeroy))
-                )
-            box_right = (
-                    (np.max(nonzerox)-2*section_length, np.min(nonzeroy)), 
-                    (np.max(nonzerox) - section_length, np.max(nonzeroy))
-                )
 
-            img = cv2.rectangle(img, box_left[0], box_left[1], (11,102,0), 4)
-            img = cv2.rectangle(img, box_right[0], box_right[1], (11,102,0), 4)
+        #if nonzerox_length > 350:
+        #    print('Splitting...')
+        #    section_length = nonzerox_length // 6
+        #    box_left = (
+        #            (np.min(nonzerox) + section_length, np.min(nonzeroy)), 
+        #            (np.min(nonzerox)+2*section_length, np.max(nonzeroy))
+        #        )
+        #    box_right = (
+        #            (np.max(nonzerox)-2*section_length, np.min(nonzeroy)), 
+        #            (np.max(nonzerox) - section_length, np.max(nonzeroy))
+        #        )
+        #    img = cv2.rectangle(img, box_left[0], box_left[1], (11,102,0), 4)
+        #    img = cv2.rectangle(img, box_right[0], box_right[1], (11,102,0), 4)
+        #else:
 
-        else:
-            # Define a bounding box based on min/max x and y
-            bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+        # Define a bounding box based on min/max x and y
+        bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
 
-            # Draw the box on the image
-            img = cv2.rectangle(img, bbox[0], bbox[1], (11,102,0), 4)
+        # Draw the box on the image
+        img = cv2.rectangle(img, bbox[0], bbox[1], (11,102,0), 4)
 
         return img
 
@@ -360,7 +361,8 @@ def get_spatial(img, tcmap='LUV', size=(16, 16)):
     return features
 
 
-def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
+#def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
+def get_hog(img, orient=12, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='LUV'):
     """Get a Histogram of Oriented Gradients for an image.
 
     "Note: you could also include a keyword to set the tranform_sqrt flag but
@@ -579,6 +581,9 @@ def video_pipeline(img):
         labels = label(np.sum(conf.frame_heat_history, axis=0))
     else:
         labels = label(heatmap)
+
+    if args.debug:
+        plt.imsave(conf.dst3 + '{:04}.jpg'.format(video_pipeline.cnt), heatmap, cmap='gray')
 
     if labels[1] > 0:
         img = draw_labeled_bboxes(img, labels)
@@ -816,21 +821,20 @@ def get_svm_model(train=False, X=None, y=None, subset_size=None, model_file=None
     # Parameters for GridSearchCV
     grid_search = False
     parameters = [
-            #{'kernel': ['linear'], 'C': [1]},
             {'kernel': ['linear'], 'C': [0.001, 0.01, 1, 10]},
-            #{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [0.001, 0.001, 1, 10, 100]},
+            {'kernel': ['rbf'], 'gamma': [1e-3, 1e-4], 'C': [0.001, 0.001, 1, 10, 100]},
         ]
     if grid_search:
-        clf = GridSearchCV(conf.svc(probability=True), parameters, cv=3, verbose=9)
+        clf = GridSearchCV(SVC(probability=True), parameters, cv=3, verbose=9)
     else:
         clf = SVC(kernel='linear', C=1, probability=True) 
-        #clf = SVC(kernel='linear', C=0.1, probability=True) 
 
     clf.fit(X_train, y_train)
     print(clf)
 
-    #print('Best Params: {}'.format(clf.best_params_))
-    #print('Best Score: {}'.format(clf.best_score_))
+    if grid_search:
+        print('Best Params: {}'.format(clf.best_params_))
+        print('Best Score: {}'.format(clf.best_score_))
     print('Final score on test set: {}'.format(clf.score(X_test, y_test)))
 
     print()
@@ -907,22 +911,22 @@ def main():
     # Also create a history of heatmaps. The sum of all heatmaps will be 
     # used to detect objects instead of using just the heatmap from the current
     # image
-    main.heat_size = 25
-    main.enable_heathist = False
+    main.heat_size = 20
+    main.enable_heathist = True
 
     # Threshold for the heatmap. Any pixels in the heatmap less than this 
     # value will be forced to zero
-    main.threshold = 10 
+    main.threshold = 8
 
     # To improve processing times, only process every Nth frame when debugging.
     # For all other frames, return the current image with the last known rectangles redrawn
-    main.n = 2
+    main.n = 1
 
     #
     # Far bounding boxes
     #
     main.far_window_size = (64, 64)
-    main.far_overlap = 0.5
+    main.far_overlap = 0.2
     main.far_start_pos = (700, 400)
     main.far_end_pos = (1280, 496)
     #
@@ -947,15 +951,23 @@ def main():
     if args.train is False:
         main.clf = get_svm_model(model_file=args.clf_fname)
 
+        # The lines below create dirs that will be used to store the
+        # heat map pipeliine in static images. This is very helpful 
+        # for debugging. Note that everytime this script is called
+        # these dirs are wiped and recreated from scratch.
         if args.debug:
             main.dst1 = './output/heat1/'
             main.dst2 = './output/heat2/'
+            main.dst3 = './output/heat3/'
             if os.path.exists(main.dst1):
                 shutil.rmtree(main.dst1)
             if os.path.exists(main.dst2):
                 shutil.rmtree(main.dst2)
+            if os.path.exists(main.dst3):
+                shutil.rmtree(main.dst3)
             os.makedirs(main.dst1)
             os.makedirs(main.dst2)
+            os.makedirs(main.dst3)
 
         if args.input_video is not None:
             assert args.output_video is not None, 'Must specify an output video.'
