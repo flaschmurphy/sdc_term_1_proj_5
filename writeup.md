@@ -86,7 +86,7 @@ The code to implement HOG feature extraction is contained in the method
 `get_hog()` and has the following docstring:
 
 ```python
-def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
+def get_hog(img, orient=12, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='LUV'):
     """Get a Histogram of Oriented Gradients for an image.
 
     "Note: you could also include a keyword to set the tranform_sqrt flag but
@@ -95,9 +95,9 @@ def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tc
 
     Args:
         img: the input image
-        orient: the number of orientation bins in the output histogram. Typical values 
-            are between 6 and 12
-        pixper_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
+        orient: the number of orientation bins in the output histogram. Typical 
+            values are between 6 and 12
+        pix_per_cell: a 2-tuple giving the number of pixels per cell e.g. `(9, 9)`
         cells_per_block: a 2-tuple giving the number of cells per block
         channel: which of the 3 color channels to get the HOG for, or 'all'
         tcmap: target color map. the image will be converted to this color space 
@@ -121,35 +121,29 @@ represents the object. The following parameters need to be chosen:
 * Channel: Which of the 3 color channels to compute the HOG for
 * Color map: what color map to apply to the image before processing
 
-For 'orient', I chose a value of 10 although the original research by Dalal
-and Triggs found that at least for detection of humans, a value of 9 was
-optimal. However the value 9 was causing the video pipeline to crash whereas a
-value of 10 worked fine both in terms of detection capability and program
-stability.
+To discover which parameters to choose for the HOG feature extractor (as well
+as the other feature extraction methods, `get_spatial()` and
+`get_colorhist()`), I implemented a simple grid search method to train
+a classifier on a small subset of a few thousand images and output the accuracy
+for each combination of parameters. The script to perform this search can be
+found in the git repo as `search_params.py`. Based on this search I chose the
+LUV color space with `orient` set to 12, `pix_per_cell` to 16, `cell_per_block`
+to 2 and `channel` to all (meaning compute the HOG all 3 color channels).
 
-The pixels per cell and cells per block determine the scaling of the
-convolutions that are run over the image in the algorithm. For pixels per cell
-I chose 16 and for cells per block I chose 2. This meant that each block was
-32x32 pixels which seems a reasonable scale at which to detect a car. For
-people detection values of 8x8 have been used, so picking 32x32 would seem to
-be proportional. Unfortunately I did not have time to experiment more with
-different values. It could be that with additional experimentation a more
-optimal set of parameters could be found (by optimal, I mean in terms of
-accuracy but also processing time).
+The parameters I chose for all three feature extraction methods can be seen in
+their method signatures:
 
-For channel, I chose 'all' which means the HOG will be computed over all color
-channels. This means that color will also be taken into account in the
-computation.
+```python
+def get_colorhist(img, nbins=64, tcmap='HLS', bins_range=(0, 256), vis=False):
 
-For color map, I got some great feedback from my project reviewer who suggested 
-spending more time searching for an optimal color space for each of the feature
-extraction methods. I selected HSV for HOG extraction as it seemed to have the 
-best accuracy for the dataset.
+def get_spatial(img, tcmap='LUV', size=(16, 16)):
+
+def get_hog(img, orient=12, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='LUV'):
+
+```
 
 Below is a sample image that has been passed through the HOG method. As can be
-seen, the shape of the car is clearly delineated and can be easily identified.
-On the right side of the picture is the feature vector that is produced to be
-fed to the classifier for identification.
+seen, the shape of the car is reasonably distinct and can be identified.
 
 ![hog image](./resources/hog.png "HOG Feature Descriptor")
 
@@ -191,12 +185,12 @@ the accuracy on the frames in the video and also the test images in the test_ima
 folder was not particularly good, regardless of the validation accuracy output 
 from the classifier fit procedure. Therefore I augmented the not-car data with
 images that I took from the project video directly. Using the same sliding window
-method discussed later in this writeup, I was able to extract about 2,500 images
+method discussed later in this writeup, I was able to extract a large number of images
 that do not contain cars (most of the road sections in the video have no car visible).
 I also set the window positions to match the exact location where I was getting
 some false positives, and explicitly extract those locations as not car
 samples. This technique is called "Hard Negative Mining". When I mixed this
-data in with the provided training data, I found that I got fewer false
+data in with the provided training data, I found that I got a lot less false
 positives, although I was not able to eliminate all.
 
 This was not enough however as the classiier still had problems detecting the
@@ -315,39 +309,35 @@ For box dimension and overlap size, I chose three different sizes and ran each
 of the 3 sliding windows over each image. This was my attempt to capture cars
 that are small (i.e far away) in the image, not so small and large (i.e.
 close). Although this approach was somewhat successful, I think if I had more
-time I could probably come up with a more optimal set of sliding windows.
+time I could probably come up with a more optimal set of sliding windows. This
+is important as it has a major impact on the number of false positives that are
+proposed by the classifier. 
 
 Below is the configuration code for the sliding windows which is contained in
-the `video_pipeline()` method in the script file:
+the `main()` method in the script file:
 
 ```python    
+    # Far bounding boxes
     #
-    # Run far bounding boxes
+    main.far_window_size = (64, 64)
+    main.far_overlap = 0.25
+    main.far_start_pos = (700, 400)
+    main.far_end_pos = (1200, 685)
     #
-    window_size = (64, 64)
-    overlap = 0.25
-    start_pos = (700, 400)
-    end_pos = (img.shape[1], 465)
-
-    <code ommited>
-
+    # Middle bounding boxes
     #
-    # Run middle bounding boxes
+    main.mid_window_size = (128, 128)
+    main.mid_overlap = 0.3
+    main.mid_start_pos = (700, 380)
+    main.mid_end_pos = (1280, 580)
     #
-    window_size = (96, 96)
-    overlap = 0.25
-    start_pos = (700, 380)
-    end_pos = (img.shape[1], 477)
-
-    <code ommited>
-
+    # Near bounding boxes
     #
-    # Run near bounding boxes
+    main.near_window_size = (192, 192)
+    main.near_overlap = 0.5
+    main.near_start_pos = (700, 375)
+    main.near_end_pos = (1280, 685)
     #
-    window_size = (128, 128)
-    overlap = 0.25
-    start_pos = (700, 335)
-    end_pos = (img.shape[1], 535)
  
 ```
 
@@ -357,18 +347,18 @@ a car to be (e.g. the sky). This is can be seen in the image below which
 shows the regions for each of the 3 sets with boxes drawn in each of the
 window positions for that set.
 
-![widows](./resources/windows.png "Sliding Windows")
 
 #### 2. Show some examples of test images to demonstrate how your pipeline is working
 
-I also included color histograms (spatial and 3-channel) in my pipeline to further augment
-the classification features. These steps in the pipeline are implemented in the methods
-`get_colorhist()` and `get_spatial()`. These two steps in the pipeline can be seen in the
-image below. Note that the plot of the features on the right hand side also includes 
-the HOG data, but because the plot is before scaling, the HOG data looks like it's zero.
-This is not the case though - it's just that the range of values for HOG is very small
-compared to the other features. This is a good illustration of why it's so important
-to scale the features before training and running any prediction.
+I also included color histograms (spatial and 3-channel) in my pipeline to
+further augment the classification features. These steps in the pipeline are
+implemented in the methods `get_colorhist()` and `get_spatial()`. These two
+steps in the pipeline can be seen in the image below. Note that the plot of the
+features on the right hand side also includes the HOG data, but because the
+plot is before scaling, the HOG data looks like it's zero.  This is not the
+case though - it's just that the range of values for HOG is very small compared
+to the other features. This is a good illustration of why it's so important to
+scale the features before training and running any prediction.
 
 ![pipeline](./resources/pipeline.png "Pipeline")
 
@@ -376,15 +366,17 @@ Plus another example of an image that is not a car:
 
 ![pipeline2](./resources/notcar_pipeline.png "Pipeline")
 
-Two other aspects of the pipeline are worth noting. The first is that I used the YCrCb color
-scheme for all processing, meaning that before passing the image through the pipeline, I converted
-it to YCrCb. After some experimentation I found that this color scheme provided the best separation
-of features for the car images vs. most other schemes. YUV was a close second.
+Two other aspects of the pipeline are worth noting. The first is that I used
+the HLS and LUV color schemes for color histogram and spatial feature
+extraction respectively.  After some experimentation I found that these color
+schemes provided the best separation of features for the car images vs. most
+other schemes.
 
-The second point is that the classification had consistent problems detecting the white car
-in the video. I didn't have time to fully debug this, but a quick partial solution was to simply
-'re-color' the car to make it appear black to the pipeline! This turned out to be very simple
-with the following single line of code:
+In the first iterations of the code, I had a lot of problems detecting the
+white car, whereas the black car seemd to be ok. To try to combate this,
+I tried to simply 're-color' the car to make it appear black to
+the pipeline! This turned out to be very simple with the following single line
+of code:
 
 ```python
         # Change the white car that's causing problems into a black car
@@ -396,9 +388,10 @@ Here is an example of the result:
 
 ![black_car](./resources/black_car.png "Black Car")
 
-This was a strategy I took initially but eventually removed this line after
-further parameter tuning to make the white car more visible, and adding more
-training data as noted earlier. 
+However this was not espacially effective and so I kept debugging and searching
+for a better set of params for the feature extraction. In the end, with the
+parameters described above the trick of recoloring the white car lost any
+effectivness and I removed that line of code. 
 
 With regards to optimizing the classifier, as noted previously I tried using
 GridSearchCV to find the best parameters, but found that I was overfitting the
@@ -407,7 +400,7 @@ prediction probabilities that I could use to filter out false positives, but
 didn't manage to find a good combination of values that were useful. In the end
 the best approach I was able to come up with was to implement some basic tools
 to debug with and to augment the training data with new images taken from the
-project video. In the main code file and in the project repo, there is code
+project video. In the file `get_newimgs.py` and in other scipts, there is code
 that I wrote to make it easy for me to test the pipeline on single images, to
 view the pipeline in action in realtime and to easily process a subsample of
 the video, e.g. one particular second of video where some particular problem is
@@ -416,7 +409,7 @@ techniques would have enabled me to perfect the classifier, image
 pre-processing pipeline and video output. 
 
 The results of the final training that I did for this project are below. As 
-can be seen the classifier accuracy was 99% on the test data, which was a 20%
+can be seen the classifier accuracy was >99% on the test data, which was a 20%
 sample of the available training data.
 
 Also of note is the sanity checks performed on the training data. These checks
@@ -424,27 +417,25 @@ confirmed that the data was all of consistent size, type, that the number of
 car vs. non-car images was proportional, etc
 
 ```bash
-$ python ./obj_detection.py -t all -s model_lc1_full_with kitti_mine_v3.pkl
+$ python ./obj_detection.py -t all -s model_withnewdata.pkl
 Loading features and labels...
 Checking that all images have the same size, dtype and range...
   All images are consistent!
-  Total number of images: 8792 cars and 8792 non-cars
+  Total number of images: 30818 cars and 27565 non-cars
   Image size: (64, 64, 3), data type: float32
   Pixel value range: (0, 255)
-  File type counts: {'png': 17584}
-
-Loaded, extracted features, scaled and labeled 17,584 images, 8,792 cars and 8,792 not cars
-StandardScaler was pickled to model_lc1_full_withkitti_mine_v3_scaler.pkl
+  File type counts: {'jpg': 26224, 'png': 32159}
+Loaded, extracted features, scaled and labeled 58,383 images, 30,818 cars and 27,565 not cars
+StandardScaler was pickled to model_withnewdata_scaler.pkl
 Fitting data...
-
 SVC(C=1, cache_size=200, class_weight=None, coef0=0.0,
   decision_function_shape='ovr', degree=3, gamma='auto', kernel='linear',
   max_iter=-1, probability=True, random_state=None, shrinking=True,
   tol=0.001, verbose=False)
-Final score on test set: 0.9835086721637759
+Final score on test set: 0.9962319088807057
 
-Model was saved to model_lc1_full_withkitti_mine_v3.pkl
-$
+Model was saved to model_withnewdata.pkl
+$ 
 
 ```
 
@@ -454,42 +445,116 @@ $
 
 My final video can be seen here:
 
-* [YouTube](https://youtu.be/AvhRnC85p20)
-* [Local File](./project_video.mp4)
+* [YouTube](https://youtu.be/JHsmkH2BlJQ)
+* [Local File](./video_all.mp4)
 
 Unfortunately the detection was far from perfect despite all my efforts. There
 are likely several reasons for this but chief among them is probably the
-pre-processing steps in the pipeline need more work. I think the classifier can
-do a reasonable job with what it's given, but in a better implementation there
-would have to be more separation of features to enable the classifier to
-distinguish between cars vs. non-cars. Without having more time to spend on it however
-I had to leave the video as is.
+feature extraction steps in the pipeline could be optimized and there might be
+a better combination of windows sizes, history size, etc. Frankly, one of the
+things I learned on this project is that I don't think I would us a SVM for
+such a task in the future since I have had much better experiences with Neural
+Networks for example.  Without having more time to spend on it however I had to
+leave the video as is.
 
 #### 2. Describe how you filtered false positives and combined overlapping bounding boxes
 
 The classifier that is run on the sliding windows produces a lot of false
-positives that need to be filtered out and combined. I used a 'heatmap'
-approach to accomplish this. The basic idea is that you create an image that is
-the same size as the original image, but filled with zeros. Then for every box
-where the classifier thinks there is a car, you add some value to those pixels
-in the heatmap image. Once all boxes have been added, you end up with a canvas
-that shows where the biggest overlaps were. These overlaps can then be passed
-to the `label` method provided in the `scipy` library which delivers back
-a single image showing the unique object boundaries that correspond to the
-pixels in the heatmap. The process is implemented at the end of the
-`video_pipeline()` method with the following code:
+positives that need to be filtered out and combined. I used a 'heatmap' across
+multiple frames to accomplish this. The basic idea is that you create an image
+that is the same size as the original image, but filled with zeros.  Then for
+every box where the classifier and any filters in place thinks there is a car,
+you add some value to those pixels in the heatmap image. Once all boxes have
+been added, you end up with a canvas that shows where the biggest overlaps
+were. These overlaps can then be passed to the `label` method provided in the
+`scipy` library which delivers back a single image showing the unique object
+boundaries that correspond to the pixels in the heatmap. The process is
+implemented at the end of the `video_pipeline()` (see the code excerpt below). In
+addition to creating a heatmap for the current frame, I also stored the
+heatmaps from sequential frames in a python `deque` which is a data structure
+that is of fixed length.  By doing this the history of each histogram is
+maintained and by adding all heatmaps together for some fixed history length,
+it's possible to smooth out the detections. This method was quite effective but
+I was not able to remove all false positives and despite trying many
+combinations of values, I was not able to get a perfect boundary box detection
+for all cases. 
+
+A further method I tried was to maintain a history of each predicted box across
+multiple frames, and check if any new prediction was contained within those
+past predictions. If a prediction was not contained in any of the past
+N predictions (where 'contained' means that the center of the new prediction is
+contained within at least on box from the last frame), then this new prediction
+is rejected. This was also a pretty effective method. See code below for how
+this was implemented. 
 
 ```python
-    threshold = 80
+    # Create a history deque to track car detection boxes
+    main.hist_size = 7
+    main.enable_boxhist = True
+
+    # Also create a history of heatmaps. The sum of all heatmaps will be 
+    # used to detect objects instead of using just the heatmap from the current
+    # image
+    main.heat_size = 20
+    main.enable_heathist = True
+
+    # Threshold for the heatmap. Any pixels in the heatmap less than this 
+    # value will be forced to zero
+    main.threshold = 5
+
+    # To improve processing times, only process every Nth frame when debugging.
+    # For all other frames, return the current image with the last known rectangles redrawn
+    main.n = 1
+
+    <code omitted>
+
+    def process_boxes(pstr, img, img_dbg):
+        for box in bboxes:
+            top_left, bottom_right = box
+            sub_img = img[ top_left[1]: bottom_right[1], top_left[0]: bottom_right[0], :]
+            prediction = predict(sub_img, conf.clf, args.scaler_fname, 
+                fname=pstr + fname, vis=False, verbose=True)
+            if prediction == 1:
+                frame_boxes.append(box)
+                img, img_dbg = process_box(img, img_dbg, box, to_be_painted)
+        return img, img_dbg
+
+    def process_box(img, img_dbg, box, to_be_painted):
+        # Find the center of the new box
+        center = (box[0][0] + ((box[1][0] - box[0][0]) // 2), box[0][1] + ((box[1][1] - box[0][1]) // 2))
+
+        # If the new box has it's center contained within the boxes discovered
+        # in the last N frames (= hist_size) consider it valid otherwise reject
+        # it. If in debug mode, draw a circle to indicate that it was rejected.
+        hits = 0
+        for pastframe in conf.frame_box_history:
+            for pastbox in pastframe:
+                if (center[0] > pastbox[0][0] and center[0] < pastbox[1][0] 
+                    and center[1] > pastbox[0][1] and center[1] < pastbox[1][1]):
+                        hits += 1
+                        break
+
+        if hits == conf.hist_size and video_pipeline.cnt > conf.hist_size:
+            to_be_painted.append(box)
+
+        return img, img_dbg
+
+    <code omitted>
+
+    # Add the car predictions for this frame to the history
+    conf.frame_box_history.append(frame_boxes)
+
+    # Increment the heatmap, conpare it to history and draw the labels
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
-    for box in car_boxes:
-        heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 20
+    for box in to_be_painted:
+        heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 1
+    heatmap[heatmap < conf.threshold] = 0
+    conf.frame_heat_history.append(heatmap)
+    labels = label(np.sum(conf.frame_heat_history, axis=0))
 
-    heatmap[heatmap <= threshold] = 0
-    labels = label(heatmap)
-    draw_labeled_bboxes(img_, labels)
-
-    return img_[:,:,::-1]
+    # If there are boxes to draw on the final image, do so
+    if labels[1] > 0:
+        img = draw_labeled_bboxes(img, labels)
 
 ```
 
@@ -497,6 +562,10 @@ The threshold value has the effect of filtering out any pixels in the heatmap
 that had a total bounding box overlap value less than or equal to this value,
 i.e. if there is not enough overlap in sliding window detection, consider it
 a false positive and discard it.
+
+And here is an example of the process in action:
+
+![heatmap](./resources/heatmap.png "Heatmap")
 
 The step to draw the boxes back onto the original image is implemented in the
 following method:
@@ -517,44 +586,16 @@ def draw_labeled_bboxes(img, labels):
 
 ```
 
-And here is an example of the process in action:
+The combination of filtering steps can be seen in the image below. Where you
+see a white box, the classifier had predicted a car. A white box with a red
+circle in it is a region that was filtered out by the box filter (meaning the
+one that checks if the new box is contained by enough old boxes) and a yellow
+box with slightly darker yellow circle is a region that was allowed through the
+history filter but then caught by the heatmap. Finally, the thick green box is
+the area where the final output classifies a car.
 
-![heatmap](./resources/heatmap.png "Heatmap")
+![filters](resources/window_filtering.png "Filtering")
 
-In addition to this, I also included a python deque which is a data structure
-that only allows a fixed number of elements. This can be used as an easy way to
-track the history of the detected boxes. I then checked each new detection to
-see if the the center of the new prediction was contained in any of the boxes
-in this history object. If the new detection was not present, I discarded it as
-a false positive, 
-
-Another mechanism to reduce false positivies is to store the heatmaps over some
-number of frames and sum them together before labeling them. This should have
-the effect of smoothing out the boxes and reducing false positivies.
-
-```python
-    history = deque(maxlen=1)
-
-    heat_size = 5
-    heat_history = deque(maxlen=heat_size)
-
-    prediction = predict(sub_img, CLF, args.scaler_fname, fname='far_' + fname, vis=False, verbose=True)
-    if prediction == 1:
-        center = (box[0][0] + ((box[1][0] - box[0][0]) / 2), box[0][1] + ((box[1][1] - box[0][1]) / 2))
-        hit = False
-        for past_box in history:
-            if (center[0] > past_box[0][0] and center[0] < past_box[1][0] 
-                and center[1] > past_box[0][1] and center[1] < past_box[1][1]):
-                    hit = True
-        if hit or len(history) == 0:
-            history.append(box)
-            car_boxes.append(box)
-
-    heat_history.append(heatmap) 
-    labels = label(sum(heat_history))
-    draw_labeled_bboxes(img_, labels)
-
-```
 
 ### Discussion
 
@@ -562,17 +603,16 @@ Like all the Udacity projects, this was a very interesting one, but also a very
 challenging one that took far more time than anticipated. Although I'm
 disappointed with the quality of the detection in the final output, I did get
 a very good sense of the potential that Computer Vision combined with machine
-learning techniques like Support Vector Machines, Decision Trees and/or Deep
-Neural Networks could have. 
+learning techniques like Support Vector Machines, Decision Trees and/or Neural
+Networks could have. 
 
-The implementation did not do well with white cars and after working to address
-that problem, it started to do worst with the black car. Unfortunately I was not 
-able to find time to further debug this. Being so sensitive to color is
-obviously a major weakness and therefore a better understanding of the
-available color spaces would be needed to take it further. If combining this
-with lane detection, traffic light detection and more, then multiple parallel
-pipelines would surely be required, each with it's own pre-processing,
-thresholds, classification model, etc.
+The implementation did not do well with white cars initially and after working
+to address that problem, it started to do worst with the black car. Being so
+sensitive to color is obviously a major weakness and therefore a better
+understanding of the available color spaces would be needed to take it further.
+If combining this with lane detection, traffic light detection and more, then
+multiple parallel pipelines would surely be required, each with it's own
+pre-processing, thresholds, classification model, etc.
 
 One major problem that I faced was realizing that the StandardScaler object
 needs to be persisted and reused. It was not obvious to me in the documentation
@@ -593,10 +633,11 @@ working with some kind of magic black box. Having said that, its possible to
 print out images along the pipeline and by spending time to understand the math
 behind the model, I'm sure a great deal of progress could be made with time. 
 
-One interesting aspect of this project and the last one is the efficiency of the
-pipeline processing. The final implementation in this repo takes in the order
-of 2 hours to process a 50s video. Obviously in a real car one would need to be
-able to process video in real-time, meaning each frame would need to be fully
-processed and actuated in something like 1ms to 2ms.  An interesting follow up
-would be to see just how fast such an object detection and tracking script
-could be made to run. 
+Overall I'm very disapointed that the video results were not better but due to
+time constraints I am unable to continune optimizing further. In retrospect,
+I would not use an SVM for such a task in future. A Neural Networks would be
+far easier to get working and would probably produce better results.
+Unfortunately by the time I reached this conclusion there was not enough time
+left to change course. 
+
+

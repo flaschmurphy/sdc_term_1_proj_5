@@ -33,16 +33,20 @@ import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
 
 
-CAR_FNAMES = glob.glob('training_images/my_images/car2/*.jpg')[:5000]
-CAR_FNAMES += glob.glob('training_images/my_images/car3/*.jpg')[:5000]
+CAR_FNAMES = glob.glob('training_images/my_images/car1/*')
+CAR_FNAMES += glob.glob('training_images/my_images/car2/*')
+CAR_FNAMES += glob.glob('training_images/my_images/car3/*')
 CAR_FNAMES += glob.glob('./training_images/vehicles/*/*.png')
-#CAR_FNAMES += glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
-NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar/*.png')[:3000]
-NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar2/*.jpg')[:3000]
+CAR_FNAMES += glob.glob('./training_images/vehicles/[!KITTI]*/*.png')
+
+NOTCAR_FNAMES = glob.glob('training_images/my_images/notcar2/*')
+NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar3/*')
+NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar4/*')
+NOTCAR_FNAMES += glob.glob('training_images/my_images/notcar1/*')
 NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/[!KITTI]*/*.png')
 NOTCAR_FNAMES += glob.glob('./training_images/non-vehicles/*/*.png')
-NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
+NOTCAR_FNAMES = NOTCAR_FNAMES[:len(CAR_FNAMES)]
 
 #######################################################################################################
 #
@@ -195,31 +199,20 @@ def draw_labeled_bboxes(img, labels):
         nonzeroy = np.array(nonzero[0])
         nonzerox = np.array(nonzero[1])
 
-        nonzeroy_height = np.max(nonzeroy) - np.min(nonzeroy)
-
-        #if nonzeroy_height > 200:
-        #    mid = np.min(nonzeroy) + nonzeroy_height//2
-        #    nonzeroy = nonzeroy[(nonzeroy >= mid-42) & (nonzeroy <= mid+42)]
-
-        nonzerox_length = np.max(nonzerox) - np.min(nonzerox)
-
-        #if nonzerox_length > 350:
-        #    print('Splitting...')
-        #    section_length = nonzerox_length // 6
-        #    box_left = (
-        #            (np.min(nonzerox) + section_length, np.min(nonzeroy)), 
-        #            (np.min(nonzerox)+2*section_length, np.max(nonzeroy))
-        #        )
-        #    box_right = (
-        #            (np.max(nonzerox)-2*section_length, np.min(nonzeroy)), 
-        #            (np.max(nonzerox) - section_length, np.max(nonzeroy))
-        #        )
-        #    img = cv2.rectangle(img, box_left[0], box_left[1], (11,102,0), 4)
-        #    img = cv2.rectangle(img, box_right[0], box_right[1], (11,102,0), 4)
-        #else:
-
         # Define a bounding box based on min/max x and y
-        bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+        x1, y1, x2, y2 = np.min(nonzerox), np.min(nonzeroy), np.max(nonzerox), np.max(nonzeroy)
+        min_side_length = 64
+        if x2 - x1 < min_side_length:
+            mid = x1 + ((x2 - x1) // 2)
+            x1 = x1 + mid - (min_side_length//2)
+            x2 = x1 + min_side_length
+
+        if y2 - y1 < min_side_length:
+            mid = y1 + ((y2 - y1) // 2)
+            y1 = y1 + mid - (min_side_length//2)
+            y2 = y1 + min_side_length
+
+        bbox = ((x1, y1), (x2, y2))
 
         # Draw the box on the image
         img = cv2.rectangle(img, bbox[0], bbox[1], (11,102,0), 4)
@@ -361,7 +354,6 @@ def get_spatial(img, tcmap='LUV', size=(16, 16)):
     return features
 
 
-#def get_hog(img, orient=10, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='HSV'):
 def get_hog(img, orient=12, pix_per_cell=16, cell_per_block=2, channel='all', tcmap='LUV'):
     """Get a Histogram of Oriented Gradients for an image.
 
@@ -468,7 +460,11 @@ def video_pipeline(img):
         video_pipeline.cnt = 0
     video_pipeline.cnt += 1
 
-    if args.debug and video_pipeline.cnt % conf.n != 0:
+    if args.debug and video_pipeline.cnt > 1 and video_pipeline.cnt % conf.n != 0:
+        video_pipeline.cnt += 1
+        return conf.img_hist[-1]
+    if video_pipeline.cnt < 145:
+        video_pipeline.cnt += 1
         return img
 
     fname = 'video_frame_{:04}.png'.format(video_pipeline.cnt) # a dummy file name needed by pipeline()
@@ -497,10 +493,13 @@ def video_pipeline(img):
             if prediction == 1:
                 frame_boxes.append(box)
                 img, img_dbg = process_box(img, img_dbg, box, to_be_painted)
-
         return img, img_dbg
 
     def process_box(img, img_dbg, box, to_be_painted):
+        if conf.enable_boxhist is False:
+            to_be_painted.append(box)
+            return img, img_dbg
+
         # Find the center of the new box
         center = (box[0][0] + ((box[1][0] - box[0][0]) // 2), box[0][1] + ((box[1][1] - box[0][1]) // 2))
 
@@ -516,11 +515,11 @@ def video_pipeline(img):
                         break
 
         if hits == conf.hist_size and video_pipeline.cnt > conf.hist_size:
-            to_be_painted.append(box)
             if args.debug:
-                img_dbg = cv2.circle(img_dbg, center, 20, (255,255,255), 1)
+                img_dbg = cv2.circle(img_dbg, center, 20, (0,200,200), 1)
+            to_be_painted.append(box)
         elif args.debug:
-            img_dbg = cv2.circle(img_dbg, center, 20, (0,0,255), 1)
+            img_dbg = cv2.circle(img_dbg, center, 20, (0,0,200), 1)
 
         return img, img_dbg
 
@@ -533,6 +532,7 @@ def video_pipeline(img):
     #
     bboxes = get_window_points(img.shape, conf.far_window_size, conf.far_overlap, 
             start=conf.far_start_pos, end=conf.far_end_pos)
+    #_boxes = bboxes.copy()
     img, img_dbg = process_boxes('far_', img, img_dbg)
     
     #
@@ -549,19 +549,24 @@ def video_pipeline(img):
             start=conf.near_start_pos, end=conf.near_end_pos)
     img, img_dbg = process_boxes('near_', img, img_dbg)
 
+    # Add the car predictions for this frame to the history
     conf.frame_box_history.append(frame_boxes)
 
     # Some annoying bug in cv2 that needs this copy workaround :( :(
     img = img.copy()
     img_dbg = img_dbg.copy()
 
+    # For visualizing the process, draw boxes on a debug image
     if args.debug is True:
-        # Draw all positive prediction boxes before any filtering
+        # Draw all candidate boxes
+        #for box in _boxes:
+        #    img_dbg = cv2.rectangle(img_dbg, box[0], box[1], get_clr(), 1)
+        # Draw all positive prediction boxes before any filtering (white)
         for box in frame_boxes:
-            img_dbg = cv2.rectangle(img, box[0], box[1], (255, 255, 255), 1)
-        # Draw all positive prediction boxes before after the history filter
+            img_dbg = cv2.rectangle(img_dbg, box[0], box[1], (255, 255, 255), 1)
+        # Draw all positive prediction boxes after the history filter (yellow)
         for box in to_be_painted:
-            img_dbg = cv2.rectangle(img, box[0], box[1], (0, 102, 255), 1)
+            img_dbg = cv2.rectangle(img_dbg, box[0], box[1], (0, 255, 255), 1)
 
     # Increment the heatmap, conpare it to history and draw the labels
     heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
@@ -585,7 +590,7 @@ def video_pipeline(img):
     if args.debug:
         plt.imsave(conf.dst3 + '{:04}.jpg'.format(video_pipeline.cnt), heatmap, cmap='gray')
 
-    if labels[1] > 0:
+    if labels[1] > 0 :
         img = draw_labeled_bboxes(img, labels)
         img_dbg = draw_labeled_bboxes(img_dbg, labels)
 
@@ -594,8 +599,10 @@ def video_pipeline(img):
     img_dbg = img_dbg[:,:,::-1]
 
     if args.debug is True:
+        conf.img_hist.append(img_dbg)
         return img_dbg
     else:
+        conf.img_hist.append(img)
         return img
 
 
@@ -667,9 +674,9 @@ def load_data(car_or_not='car', ratio=1, length=-1, random=False, sanity=True, v
 
             curmin, curmax = get_minmax(cur_img)
             if cur_img.shape != image_shape:
-               raise Exception('Not all images have the same shape. {} was of size {}.'.format(fname, shape))
+               raise Exception('Not all images have the same shape. {} was of shape {}.'.format(fname, cur_img.shape))
             if cur_img.dtype != data_type:
-               raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, dtype))
+               raise Exception('Not all images have the same data type. {} was of type {}.'.format(fname, cur_img.dtype))
             if curmin != first_minval or curmax != first_maxval:
                 raise Exception(
                         """Not all images have the same dinemsions, got: ({}, {}) for {}, but expected ({}, {})"""\
@@ -905,48 +912,49 @@ def main():
     global conf
 
     # Create a history deque to track car detection boxes
-    main.hist_size = 20
+    main.hist_size = 5
     main.enable_boxhist = True
 
     # Also create a history of heatmaps. The sum of all heatmaps will be 
     # used to detect objects instead of using just the heatmap from the current
     # image
-    main.heat_size = 20
+    main.heat_size = 5
     main.enable_heathist = True
 
     # Threshold for the heatmap. Any pixels in the heatmap less than this 
     # value will be forced to zero
-    main.threshold = 8
+    main.threshold = 3
 
     # To improve processing times, only process every Nth frame when debugging.
     # For all other frames, return the current image with the last known rectangles redrawn
-    main.n = 1
+    main.n = 2
 
     #
     # Far bounding boxes
     #
     main.far_window_size = (64, 64)
-    main.far_overlap = 0.2
+    main.far_overlap = 0.25
     main.far_start_pos = (700, 400)
-    main.far_end_pos = (1280, 496)
+    main.far_end_pos = (1200, 685)
     #
     # Middle bounding boxes
     #
-    main.mid_window_size = (96, 96)
+    main.mid_window_size = (128, 128)
     main.mid_overlap = 0.3
     main.mid_start_pos = (700, 380)
-    main.mid_end_pos = (1280, 500)
+    main.mid_end_pos = (1280, 580)
     #
     # Near bounding boxes
     #
-    main.near_window_size = (128, 128)
-    main.near_overlap = 0.3
-    main.near_start_pos = (700, 335)
-    main.near_end_pos = (1280, 635)
+    main.near_window_size = (192, 192)
+    main.near_overlap = 0.5
+    main.near_start_pos = (700, 375)
+    main.near_end_pos = (1280, 685)
     #
 
     main.frame_box_history = deque(maxlen=main.hist_size)
     main.frame_heat_history = deque(maxlen=main.heat_size)
+    main.img_hist = deque(maxlen=main.n)
 
     if args.train is False:
         main.clf = get_svm_model(model_file=args.clf_fname)

@@ -57,48 +57,44 @@ def test_predictions():
 
 def test_windowing():
     """Test boxes returned from `get_window_points()`. """
-    img = cv2.imread('./training_images/my_images/seed.png')
+    fname = 'training_images/my_images/seed_car1.png'
+    img = cv2.imread(fname)
+
     print()
     #
-    # Run far bounding boxes
+    # Far bounding boxes
     #
     window_size = (64, 64)
     overlap = 0.25
     start_pos = (700, 400)
-    end_pos = (img.shape[1], 465)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-    check_boxes('far_')
-    
+    end_pos = (1200, 685)
+    bboxes_far = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
     #
-    # Run middle bounding boxes
-    #
-    window_size = (96, 96)
-    overlap = 0.25
-    start_pos = (700, 380)
-    end_pos = (img.shape[1], 477)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-    check_boxes('mid_')
-
-    #
-    # Run near bounding boxes
+    # Middle bounding boxes
     #
     window_size = (128, 128)
-    overlap = 0.25
-    start_pos = (700, 335)
-    end_pos = (img.shape[1], 535)
-    bboxes = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
-    check_boxes('near_')
+    overlap = 0.3
+    start_pos = (700, 380)
+    end_pos = (1280, 580)
+    bboxes_middle = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    #
+    # Near bounding boxes
+    #
+    window_size = (192, 192)
+    overlap = 0.5
+    start_pos = (700, 375)
+    end_pos = (1280, 685)
+    bboxes_near = get_window_points(img.shape, window_size, overlap, start=start_pos, end=end_pos)
+    #
 
     # Visualize the results
     vis = True
     if vis:
-        #fname = './test_images/bbox-example-image.jpg'
-        #fname = './test_frames/frame_031.png'
-        fname = './test_frames/vlcsnap-2017-12-07-17h34m52s922.png'
+        fname = 'training_images/my_images/seed_car2.png'
         get_clr = lambda: np.random.randint(255, size=3).tolist()
 
         plt.close()
-        f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(25, 10))
+        f, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 10))
 
         canvas1 = imread(fname)
         for box in bboxes_far:
@@ -291,11 +287,11 @@ def test_heatmap(fname, car_boxes):
 def main():
     global args, clf, scaler_fname
 
-    args = parse_args()
-    clf = pickle.load(open(args.clf, 'rb'))
-    scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
+    #args = parse_args()
+    #clf = pickle.load(open(args.clf, 'rb'))
+    #scaler_fname = ''.join(args.clf.split('.')[:-1]) + '_scaler.pkl'
 
-    #test_predictions()
+    ##test_predictions()
  
     test_windowing()
     #test_sliding_window_predictions()
