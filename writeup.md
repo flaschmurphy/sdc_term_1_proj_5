@@ -636,7 +636,7 @@ behind the model, I'm sure a great deal of progress could be made with time.
 
 Overall I'm disapointed that the video results were not better but due to
 time constraints I am unable to continune optimizing further. In retrospect,
-I would not use an SVM for such a task in future. A Neural Networks would be
+I would not use an SVM for such a task in future. A Neural Network would be
 far easier to get working and would probably produce better results.
 Unfortunately by the time I reached this conclusion there was not enough time
 left to change course. 

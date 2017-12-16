@@ -460,12 +460,13 @@ def video_pipeline(img):
         video_pipeline.cnt = 0
     video_pipeline.cnt += 1
 
-    if args.debug and video_pipeline.cnt > 1 and video_pipeline.cnt % conf.n != 0:
-        video_pipeline.cnt += 1
-        return conf.img_hist[-1]
     if video_pipeline.cnt < 145:
         video_pipeline.cnt += 1
         return img
+
+    if args.debug and len(conf.img_hist) > 0 and video_pipeline.cnt % conf.n != 0:
+        video_pipeline.cnt += 1
+        return conf.img_hist[-1]
 
     fname = 'video_frame_{:04}.png'.format(video_pipeline.cnt) # a dummy file name needed by pipeline()
 
