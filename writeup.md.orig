@@ -347,7 +347,6 @@ a car to be (e.g. the sky). This is can be seen in the image below which
 shows the regions for each of the 3 sets with boxes drawn in each of the
 window positions for that set.
 
-![widows](./resources/windows.png "Sliding Windows")
 
 #### 2. Show some examples of test images to demonstrate how your pipeline is working
 
@@ -427,7 +426,7 @@ Checking that all images have the same size, dtype and range...
   Pixel value range: (0, 255)
   File type counts: {'jpg': 26224, 'png': 32159}
 Loaded, extracted features, scaled and labeled 58,383 images, 30,818 cars and 27,565 not cars
-StandardScaler was pickled to model_scaler.pkl
+StandardScaler was pickled to model_withnewdata_scaler.pkl
 Fitting data...
 SVC(C=1, cache_size=200, class_weight=None, coef0=0.0,
   decision_function_shape='ovr', degree=3, gamma='auto', kernel='linear',
@@ -435,7 +434,7 @@ SVC(C=1, cache_size=200, class_weight=None, coef0=0.0,
   tol=0.001, verbose=False)
 Final score on test set: 0.9962319088807057
 
-Model was saved to model.pkl
+Model was saved to model_withnewdata.pkl
 $ 
 
 ```
@@ -604,6 +603,7 @@ Like all the Udacity projects, this was a very interesting one, but also a very
 challenging one that took far more time than anticipated. Although I'm
 disappointed with the quality of the detection in the final output, I did get
 a very good sense of the potential that Computer Vision combined with machine
+<<<<<<< HEAD
 learning techniques like Support Vector Machines, Decision Trees and/or Neural
 Networks could have. 
 
@@ -614,6 +614,21 @@ understanding of the available color spaces would be needed to take it further.
 If combining this with lane detection, traffic light detection and more, then
 multiple parallel pipelines would surely be required, each with it's own
 pre-processing, thresholds, classification model, etc.
+=======
+learning techniques like Support Vector Machines, Decision Trees and/or Deep
+Neural Networks could have. 
+
+The implementation does not do well with white cars and would probably
+struggle to deal with a very busy environment with many cars all around. It fails 
+to detect the white car once it's a certain distance from the
+camera which is frustrating. Unfortunately I was not able to find time to
+further debug this. Being so sensitive to color is obviously a major weakness
+and therefore a better understanding of the available color spaces would be
+needed to take it further.  If combining this with lane detection, traffic
+light detection and more, then multiple parallel pipelines would surely be
+required, each with it's own pre-processing, thresholds, classification model,
+etc.
+>>>>>>> 368d0c108083b416ee1e4df95b80e27230f9816a
 
 One major problem that I faced was realizing that the StandardScaler object
 needs to be persisted and reused. It was not obvious to me in the documentation
@@ -634,7 +649,8 @@ working with some kind of magic black box. Having said that, its possible to
 print out images along the pipeline and by spending time to understand the math
 behind the model, I'm sure a great deal of progress could be made with time. 
 
-Overall I'm disapointed that the video results were not better but due to
+<<<<<<< HEAD
+Overall I'm very disapointed that the video results were not better but due to
 time constraints I am unable to continune optimizing further. In retrospect,
 I would not use an SVM for such a task in future. A Neural Networks would be
 far easier to get working and would probably produce better results.
@@ -642,3 +658,20 @@ Unfortunately by the time I reached this conclusion there was not enough time
 left to change course. 
 
 
+=======
+One interesting aspect of this project and the last one is the efficiency of the
+pipeline processing. The final implementation in this repo takes many hours to 
+process a 50s video. Obviously in a real car one would need to be
+able to process video in real-time, meaning each frame would need to be fully
+processed and actuated in something like 1ms to 2ms. I wonder if this could be
+possible with Python (ignoring the safety issues with using Python in such
+a context). The underlying libs. e.g. OpenCV are multithreaded as far as
+I know, so the Global Lock in Python can be removed as a bottleneck to
+implementing a multithreaded approach. It would also be possible to segment the
+pipeline into multiple processes to provide additional parallelism. If running
+on an Intel platform, Intel provides optimized implementations of Python and
+many libs such as NumPy and TensorFlow. On toy problems these optimized libs
+haven been shown to run literally thousands of times faster than the standard
+implementations. An interesting follow up would be to see just how fast such an
+object detection and tracking script could be made to run. 
+>>>>>>> 368d0c108083b416ee1e4df95b80e27230f9816a
