@@ -603,23 +603,22 @@ the area where the final output classifies a car.
 Like all the Udacity projects, this was a very interesting one, but also a very
 challenging one that took far more time than anticipated. Although I'm
 disappointed with the quality of the detection in the final output, I did get
-a very good sense of the potential that Computer Vision combined with machine
-learning techniques like Support Vector Machines, Decision Trees and/or Neural
-Networks could have. 
+a very good sense of the potential that traditional computer vision combined with 
+machine learning techniques like Support Vector Machines, Decision Trees and/or 
+Neural Networks could have. 
 
 The implementation did not do well with white cars initially and after working
-to address that problem, it started to do worst with the black car. Being so
-sensitive to color is obviously a major weakness and therefore a better
-understanding of the available color spaces would be needed to take it further.
-If combining this with lane detection, traffic light detection and more, then
-multiple parallel pipelines would surely be required, each with it's own
-pre-processing, thresholds, classification model, etc.
+to address that problem, it started to do worse with the black car. Being so
+sensitive to color is obviously a major weakness. If combining this with lane 
+detection, traffic light detection and more, then multiple parallel pipelines 
+would surely be required, each with it's own pre-processing, thresholds, 
+classification model, etc.
 
 One major problem that I faced was realizing that the StandardScaler object
 needs to be persisted and reused. It was not obvious to me in the documentation
 or lesson that if I wanted to train in one process and then infer in another,
-that I would need to save and reload that scaler. Once I resolved this, a lot
-of the rest started to come together. 
+that I would need to save and reload that scaler. Seems obvious in retrospect.
+Once I resolved this, a lot of the rest started to come together. 
 
 Another major problem was getting the classifier to perform to a reasonable
 accuracy on my test images. This was quite a challenge and involved a lot of
